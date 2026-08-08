@@ -371,7 +371,354 @@ ToolsTab:AddButton({
 })
 
 -- ══════════════════════════════════════════════════════════════
--- 7. KEY AUTH TAB - 密钥输入 / HWID 展示（配合 QuantumUI.SetupKeyAuth 使用）
+-- 7. MOVEMENT TAB - 移动类功能（WalkSpeed / JumpPower / InfJump / NoClip / Fly / TP）
+-- ══════════════════════════════════════════════════════════════
+local MovementTab = Window:AddTab({
+    Name = "Movement",
+    Icon = "rbxassetid://6034466796",
+})
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local LocalPlayer = Players.LocalPlayer
+
+-- 全局状态
+local movementState = {
+    WalkSpeed = 16,
+    JumpPower = 50,
+    SetWalkSpeed = false,
+    SetJumpPower = false,
+    InfJump = false,
+    NoClip = false,
+    FlyEnabled = false,
+    FlySpeed = 50,
+}
+
+-- 辅助：获取角色
+local function getChar()
+    return LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+end
+local function getHum()
+    local char = getChar()
+    return char and char:FindFirstChildOfClass("Humanoid")
+end
+local function getRoot()
+    local char = getChar()
+    return char and char:FindFirstChild("HumanoidRootPart")
+end
+
+-- ═══ WalkSpeed ═══
+MovementTab:AddSection({ Name = "WalkSpeed" })
+
+MovementTab:AddSlider({
+    Name = "WalkSpeed Value",
+    Min = 16, Max = 500, Default = 16, Increment = 1,
+    Suffix = "",
+    Flag = "Move_WalkSpeed",
+    Callback = function(value)
+        movementState.WalkSpeed = value
+    end,
+})
+
+MovementTab:AddToggle({
+    Name = "Enable WalkSpeed",
+    Default = false,
+    Flag = "Move_WalkSpeedEnabled",
+    Callback = function(state)
+        movementState.SetWalkSpeed = state
+        if state then
+            task.spawn(function()
+                while movementState.SetWalkSpeed do
+                    local hum = getHum()
+                    if hum and hum.Health > 0 and hum.WalkSpeed ~= movementState.WalkSpeed then
+                        hum.WalkSpeed = movementState.WalkSpeed
+                    end
+                    task.wait(0.1)
+                end
+            end)
+        else
+            local hum = getHum()
+            if hum then hum.WalkSpeed = 16 end
+        end
+    end,
+})
+
+-- ═══ JumpPower ═══
+MovementTab:AddSection({ Name = "JumpPower" })
+
+MovementTab:AddSlider({
+    Name = "JumpPower Value",
+    Min = 50, Max = 500, Default = 50, Increment = 1,
+    Suffix = "",
+    Flag = "Move_JumpPower",
+    Callback = function(value)
+        movementState.JumpPower = value
+    end,
+})
+
+MovementTab:AddToggle({
+    Name = "Enable JumpPower",
+    Default = false,
+    Flag = "Move_JumpPowerEnabled",
+    Callback = function(state)
+        movementState.SetJumpPower = state
+        if state then
+            task.spawn(function()
+                while movementState.SetJumpPower do
+                    local hum = getHum()
+                    if hum and hum.Health > 0 and hum.JumpPower ~= movementState.JumpPower then
+                        hum.JumpPower = movementState.JumpPower
+                    end
+                    task.wait(0.1)
+                end
+            end)
+        else
+            local hum = getHum()
+            if hum then hum.JumpPower = 50 end
+        end
+    end,
+})
+
+-- ═══ Infinite Jump ═══
+MovementTab:AddSection({ Name = "Infinite Jump" })
+
+MovementTab:AddToggle({
+    Name = "Infinite Jump",
+    Default = false,
+    Flag = "Move_InfJump",
+    Callback = function(state)
+        movementState.InfJump = state
+        if state then
+            local conn
+            conn = UserInputService.JumpRequest:Connect(function()
+                if not movementState.InfJump then
+                    conn:Disconnect()
+                    return
+                end
+                local hum = getHum()
+                if hum then
+                    hum:ChangeState(Enum.HumanoidStateType.Jumping)
+                end
+            end)
+        end
+    end,
+})
+
+-- ═══ NoClip ═══
+MovementTab:AddSection({ Name = "NoClip" })
+
+MovementTab:AddToggle({
+    Name = "NoClip (穿墙)",
+    Default = false,
+    Flag = "Move_NoClip",
+    Callback = function(state)
+        movementState.NoClip = state
+        if state then
+            task.spawn(function()
+                local conn
+                conn = RunService.Stepped:Connect(function()
+                    if not movementState.NoClip then
+                        conn:Disconnect()
+                        return
+                    end
+                    local char = getChar()
+                    if char then
+                        for _, part in ipairs(char:GetDescendants()) do
+                            if part:IsA("BasePart") and part.CanCollide then
+                                part.CanCollide = false
+                            end
+                        end
+                    end
+                end)
+            end)
+        else
+            -- 恢复碰撞
+            local char = getChar()
+            if char then
+                for _, part in ipairs(char:GetDescendants()) do
+                    if part:IsA("BasePart") then
+                        part.CanCollide = true
+                    end
+                end
+            end
+        end
+    end,
+})
+
+-- ═══ Fly ═══
+MovementTab:AddSection({ Name = "Fly (飞行)" })
+
+MovementTab:AddSlider({
+    Name = "Fly Speed",
+    Min = 10, Max = 300, Default = 50, Increment = 5,
+    Suffix = "",
+    Flag = "Move_FlySpeed",
+    Callback = function(value)
+        movementState.FlySpeed = value
+    end,
+})
+
+MovementTab:AddKeybind({
+    Name = "Fly Toggle Key",
+    Default = Enum.KeyCode.F,
+    Flag = "Move_FlyKey",
+    Callback = function()
+        movementState.FlyEnabled = not movementState.FlyEnabled
+        if movementState.FlyEnabled then
+            task.spawn(function()
+                local flyConn
+                local flyBV, flyBG
+                local function startFly()
+                    local root = getRoot()
+                    local hum = getHum()
+                    if not root or not hum then return end
+                    hum.PlatformStand = true
+                    flyBV = Instance.new("BodyVelocity")
+                    flyBV.MaxForce = Vector3.new(9e9, 9e9, 9e9)
+                    flyBV.Velocity = Vector3.zero
+                    flyBV.Parent = root
+                    flyBG = Instance.new("BodyGyro")
+                    flyBG.MaxTorque = Vector3.new(9e9, 9e9, 9e9)
+                    flyBG.P = 10000
+                    flyBG.CFrame = root.CFrame
+                    flyBG.Parent = root
+                end
+                local function stopFly()
+                    local hum = getHum()
+                    if hum then hum.PlatformStand = false end
+                    if flyBV then flyBV:Destroy() end
+                    if flyBG then flyBG:Destroy() end
+                end
+                startFly()
+                flyConn = RunService.RenderStepped:Connect(function()
+                    if not movementState.FlyEnabled then
+                        flyConn:Disconnect()
+                        stopFly()
+                        return
+                    end
+                    local root = getRoot()
+                    local cam = workspace.CurrentCamera
+                    if not root or not cam then return end
+                    local dir = Vector3.zero
+                    local cf = cam.CFrame
+                    if UserInputService:IsKeyDown(Enum.KeyCode.W) then dir = dir + cf.LookVector end
+                    if UserInputService:IsKeyDown(Enum.KeyCode.S) then dir = dir - cf.LookVector end
+                    if UserInputService:IsKeyDown(Enum.KeyCode.A) then dir = dir - cf.RightVector end
+                    if UserInputService:IsKeyDown(Enum.KeyCode.D) then dir = dir + cf.RightVector end
+                    if UserInputService:IsKeyDown(Enum.KeyCode.Space) then dir = dir + Vector3.new(0, 1, 0) end
+                    if UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) then dir = dir - Vector3.new(0, 1, 0) end
+                    if flyBV then
+                        flyBV.Velocity = dir * movementState.FlySpeed
+                    end
+                    if flyBG then
+                        flyBG.CFrame = cam.CFrame
+                    end
+                end)
+            end)
+            Window:Notify({
+                Title = "Fly",
+                Content = "飞行已开启 (WASD移动 / Space上升 / Shift下降)",
+                Duration = 3,
+                Type = "Info",
+            })
+        else
+            local hum = getHum()
+            if hum then hum.PlatformStand = false end
+            Window:Notify({
+                Title = "Fly",
+                Content = "飞行已关闭",
+                Duration = 2,
+                Type = "Info",
+            })
+        end
+    end,
+})
+
+-- ═══ Teleport (BABFT 农场坐标) ═══
+MovementTab:AddSection({ Name = "Teleport (BABFT 坐标)" })
+
+local tpLocations = {
+    { Name = "起点", Pos = CFrame.new(-25.1, 63.0, 1152.7) },
+    { Name = "中段", Pos = CFrame.new(-25.1, 81.0, 1777.4) },
+    { Name = "终点附近", Pos = CFrame.new(-25.1, 68.5, 2576.7) },
+    { Name = "宝藏区", Pos = CFrame.new(-25.1, 114.3, 3195.2) },
+    { Name = "地面 (spawn)", Pos = CFrame.new(-55.7, 70.7, 125) },
+    { Name = "地下宝藏", Pos = CFrame.new(-55.7, -360.7, 9492.4) },
+}
+
+MovementTab:AddDropdown({
+    Name = "Select Location",
+    Items = (function()
+        local names = {}
+        for _, loc in ipairs(tpLocations) do
+            table.insert(names, loc.Name)
+        end
+        return names
+    end)(),
+    Default = "起点",
+    Multi = false,
+    Flag = "Move_TPLocation",
+    Callback = function(selected)
+        for _, loc in ipairs(tpLocations) do
+            if loc.Name == selected then
+                movementState._SelectedTP = loc
+                break
+            end
+        end
+    end,
+})
+
+MovementTab:AddButton({
+    Name = "Teleport!",
+    Callback = function()
+        local target = movementState._SelectedTP or tpLocations[1]
+        local char = getChar()
+        if char and target then
+            char:PivotTo(target.Pos)
+            print("[API Demo] 传送到:", target.Name)
+            Window:Notify({
+                Title = "Teleport",
+                Content = "已传送到: " .. target.Name,
+                Duration = 2,
+                Type = "Success",
+            })
+        else
+            Window:Notify({
+                Title = "Teleport",
+                Content = "角色未找到",
+                Duration = 2,
+                Type = "Error",
+            })
+        end
+    end,
+})
+
+-- ═══ Anti-AFK ═══
+MovementTab:AddSection({ Name = "Anti-AFK" })
+
+local antiAfkEnabled = false
+local VirtualUser = game:GetService("VirtualUser")
+
+MovementTab:AddToggle({
+    Name = "Anti-AFK",
+    Default = false,
+    Flag = "Move_AntiAFK",
+    Callback = function(state)
+        antiAfkEnabled = state
+    end,
+})
+
+LocalPlayer.Idled:Connect(function()
+    if antiAfkEnabled then
+        VirtualUser:Button2Down(Vector2.new(0, 0), workspace.CurrentCamera.CFrame)
+        task.wait(1)
+        VirtualUser:Button2Up(Vector2.new(0, 0), workspace.CurrentCamera.CFrame)
+    end
+end)
+
+-- ══════════════════════════════════════════════════════════════
+-- 8. KEY AUTH TAB - 密钥输入 / HWID 展示（配合 QuantumUI.SetupKeyAuth 使用）
 -- ══════════════════════════════════════════════════════════════
 local KeyAuthTab = Window:AddTab({
     Name = "Access",

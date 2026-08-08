@@ -1,7 +1,7 @@
 --[[
     ╔══════════════════════════════════════════════════════════════════╗
     ║                         LOG-HUB 脚本中心                          ║
-    ║                      Version 1.2.0                               ║
+    ║                      Version 1.3.0                               ║
     ║                         Created by log_quick                     ║
     ║                                                                  ║
     ║  功能：                                                          ║
@@ -34,6 +34,12 @@ local GAME_REGISTRY = {
         PlaceIds = { 4588604953 },
         ScriptPath = "/Criminality_QuantumUI.lua",
         Description = "Criminality 辅助: 世界/玩家/战斗/视觉/白名单, 5 大 Tab, Config 自动保存",
+    },
+    {
+        Name = "造船寻宝 (Build a Boat for Treasure)",
+        PlaceIds = { 537413528 },
+        ScriptPath = "/BABFT_QuantumUI.lua",
+        Description = "BABFT 辅助: 移动 (WalkSpeed/JumpPower/InfJump/NoClip/Fly/TP) + AutoFarm (河道分段传送+领取宝藏) + Anti-AFK",
     },
     -- 未来扩展:
     -- {
