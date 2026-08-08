@@ -1,13 +1,13 @@
 --[[
     ╔══════════════════════════════════════════════════════════════════╗
     ║                         LOG-HUB 脚本中心                          ║
-    ║                      Version 1.3.0                               ║
+    ║                      Version 1.4.0                               ║
     ║                         Created by log_quick                     ║
     ║                                                                  ║
     ║  功能：                                                          ║
     ║  • 注入后自动检测当前游戏 (通过 PlaceId)                          ║
-    ║  • 匹配成功 → 直接加载对应脚本，不询问用户                         ║
-    ║  • 匹配失败 → 通知用户当前游戏不受支持                             ║
+    ║  • 匹配成功 → 直接加载对应游戏脚本，不询问用户                     ║
+    ║  • 匹配失败 → 加载通用脚本: Infinite Yield + 杂项 (坐标获取等)   ║
     ╚══════════════════════════════════════════════════════════════════╝
 
     使用方法:
@@ -125,27 +125,385 @@ end
 -- 4. 脚本加载器
 -- ══════════════════════════════════════════════════════════════════
 
-local function loadScript(scriptEntry)
-    local url = GITHUB_BASE .. scriptEntry.ScriptPath
+local function loadScriptByUrl(url, label)
+    label = label or "脚本"
     local success, result = pcall(function()
         return game:HttpGet(url)
     end)
     if not success then
-        warn("[Log-Hub] 获取脚本失败:", result)
+        warn(("[Log-Hub] 获取%s失败: %s"):format(label, tostring(result)))
         return false
     end
-    local execSuccess, execErr = pcall(function()
+    local execOk, execErr = pcall(function()
         loadstring(result)()
     end)
-    if not execSuccess then
-        warn("[Log-Hub] 执行脚本失败:", execErr)
+    if not execOk then
+        warn(("[Log-Hub] 执行%s失败: %s"):format(label, tostring(execErr)))
         return false
     end
     return true
 end
 
+local function loadScript(scriptEntry)
+    local url = GITHUB_BASE .. scriptEntry.ScriptPath
+    return loadScriptByUrl(url, scriptEntry.Name .. " 脚本")
+end
+
 -- ══════════════════════════════════════════════════════════════════
--- 5. 主流程 - 检测 → 直接加载
+-- 5. 通用脚本 — 未匹配游戏时使用
+--    内容:
+--      • Infinite Yield (命令行指令集)
+--      • 杂项: 打印坐标 / Clipboard复制坐标 / WalkSpeed / JumpPower / Anti-AFK / 重新注入Hub
+-- ══════════════════════════════════════════════════════════════════
+
+local function loadGenericScript()
+    print("[Log-Hub] 游戏未匹配，加载通用脚本 (InfiniteYield + 杂项)...")
+    notify("Log-Hub", "通用模式\n加载 Infinite Yield + 杂项", 4)
+
+    -- ── 5.1 加载 Infinite Yield ──
+    task.spawn(function()
+        local iyOk = loadScriptByUrl(
+            "https://raw.githubusercontent.com/EdgeIY/infiniteyield/master/source",
+            "Infinite Yield"
+        )
+        if iyOk then
+            print("[Log-Hub] Infinite Yield 加载成功")
+            notify("Log-Hub", "Infinite Yield 已加载\n按 RightShift 打开", 3)
+        else
+            notify("Log-Hub", "Infinite Yield 加载失败", 3)
+        end
+    end)
+
+    -- ── 5.2 加载 Quantum UI 库 (为杂项功能提供 UI 容器) ──
+    local libOk, QuantumUI = pcall(function()
+        return loadstring(game:HttpGet(GITHUB_BASE .. "/SciFi-UI-Library/source.lua"))()
+    end)
+
+    if not libOk then
+        warn("[Log-Hub] 通用模式: Quantum UI 库加载失败，跳过 UI")
+        return
+    end
+
+    local Players          = game:GetService("Players")
+    local LocalPlayer      = Players.LocalPlayer
+    local RunService       = game:GetService("RunService")
+    local VirtualUser      = game:GetService("VirtualUser")
+    local UserInputService = game:GetService("UserInputService")
+
+    local Window = QuantumUI.new({
+        Title    = "通用模式 - " .. GameName,
+        Subtitle = "PlaceId: " .. tostring(PlaceId) .. "  |  Log-Hub v1.4.0",
+        ThemeColor = Color3.fromRGB(0, 200, 255),
+        Transparency = 0.3,
+        Size     = UDim2.new(0, 560, 0, 440),
+        Keybind  = Enum.KeyCode.RightControl,
+    })
+
+    task.wait(3.5)
+    _G.QuantumUI_Window = Window
+
+    -- ── 辅助函数 ──
+    local function getChar()
+        return LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+    end
+    local function getHum()
+        local c = getChar()
+        return c and c:FindFirstChildOfClass("Humanoid")
+    end
+    local function getRoot()
+        local c = getChar()
+        return c and c:FindFirstChild("HumanoidRootPart")
+    end
+
+    -- 全局状态
+    local miscState = {
+        WalkSpeed       = 16,
+        SetWalkSpeed    = false,
+        JumpPower       = 50,
+        SetJumpPower    = false,
+        AntiAFK         = false,
+    }
+
+    -- ── TAB 1: 位置 & 信息 ──
+    local InfoTab = Window:AddTab({
+        Name = "位置/信息",
+        Icon = "rbxassetid://6034287594",
+    })
+
+    InfoTab:AddSection({ Name = "当前游戏信息" })
+
+    InfoTab:AddParagraph({
+        Title   = "游戏信息",
+        Content = table.concat({
+            "Game Name:  " .. GameName,
+            "PlaceId:    " .. tostring(PlaceId),
+            "JobId:      " .. (tostring(game.JobId) or "N/A"),
+            "Player:     " .. (LocalPlayer.Name or "N/A"),
+            "UserId:     " .. tostring(LocalPlayer.UserId),
+        }, "\n"),
+    })
+
+    InfoTab:AddButton({
+        Name = "复制 PlaceId 到剪贴板",
+        Callback = function()
+            if setclipboard then
+                setclipboard(tostring(PlaceId))
+                Window:Notify({ Title = "已复制", Content = "PlaceId: " .. tostring(PlaceId), Duration = 2, Type = "Success" })
+            else
+                Window:Notify({ Title = "失败", Content = "当前执行器不支持 setclipboard", Duration = 2, Type = "Error" })
+            end
+        end,
+    })
+
+    InfoTab:AddSection({ Name = "坐标获取" })
+
+    -- 实时显示坐标标签
+    local coordsLabel = InfoTab:AddLabel({ Text = "X: 0.00  Y: 0.00  Z: 0.00" })
+    local coordsConn
+    task.spawn(function()
+        coordsConn = RunService.Heartbeat:Connect(function()
+            local root = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+            if root and coordsLabel then
+                local p = root.Position
+                coordsLabel:SetText(string.format("X: %.2f   Y: %.2f   Z: %.2f", p.X, p.Y, p.Z))
+            end
+        end)
+    end)
+
+    InfoTab:AddButton({
+        Name = "打印当前坐标 (控制台)",
+        Callback = function()
+            local root = getRoot()
+            if root then
+                local p = root.Position
+                print(("[Log-Hub] 当前坐标: Vector3.new(%.3f, %.3f, %.3f)"):format(p.X, p.Y, p.Z))
+                print(("[Log-Hub] CFrame: CFrame.new(%.3f, %.3f, %.3f)"):format(p.X, p.Y, p.Z))
+                Window:Notify({
+                    Title = "坐标",
+                    Content = string.format("X:%.2f Y:%.2f Z:%.2f\n(已输出至控制台)", p.X, p.Y, p.Z),
+                    Duration = 4, Type = "Info",
+                })
+            end
+        end,
+    })
+
+    InfoTab:AddButton({
+        Name = "复制 Vector3 坐标",
+        Callback = function()
+            local root = getRoot()
+            if root then
+                local p = root.Position
+                local s = string.format("Vector3.new(%.3f, %.3f, %.3f)", p.X, p.Y, p.Z)
+                if setclipboard then
+                    setclipboard(s)
+                    Window:Notify({ Title = "已复制", Content = s, Duration = 3, Type = "Success" })
+                else
+                    Window:Notify({ Title = "失败", Content = "执行器不支持剪贴板", Duration = 2, Type = "Error" })
+                end
+                print("[Log-Hub] 复制坐标:", s)
+            end
+        end,
+    })
+
+    InfoTab:AddButton({
+        Name = "复制 CFrame 坐标",
+        Callback = function()
+            local root = getRoot()
+            if root then
+                local p = root.Position
+                local s = string.format("CFrame.new(%.3f, %.3f, %.3f)", p.X, p.Y, p.Z)
+                if setclipboard then
+                    setclipboard(s)
+                    Window:Notify({ Title = "已复制", Content = s, Duration = 3, Type = "Success" })
+                else
+                    Window:Notify({ Title = "失败", Content = "执行器不支持剪贴板", Duration = 2, Type = "Error" })
+                end
+                print("[Log-Hub] 复制CFrame:", s)
+            end
+        end,
+    })
+
+    -- ── TAB 2: 玩家移动 ──
+    local PlayerTab = Window:AddTab({
+        Name = "玩家",
+        Icon = "rbxassetid://6034466796",
+    })
+
+    PlayerTab:AddSection({ Name = "WalkSpeed (移速)" })
+    PlayerTab:AddSlider({
+        Name      = "WalkSpeed Value",
+        Min       = 16, Max = 500, Default = 16, Increment = 1,
+        Flag      = "Generic_WalkSpeed",
+        Callback  = function(v) miscState.WalkSpeed = v end,
+    })
+    PlayerTab:AddToggle({
+        Name      = "Enable WalkSpeed",
+        Default   = false,
+        Flag      = "Generic_WalkSpeedEnabled",
+        Callback  = function(s)
+            miscState.SetWalkSpeed = s
+            if s then
+                task.spawn(function()
+                    while miscState.SetWalkSpeed do
+                        local hum = getHum()
+                        if hum and hum.Health > 0 and hum.WalkSpeed ~= miscState.WalkSpeed then
+                            hum.WalkSpeed = miscState.WalkSpeed
+                        end
+                        task.wait(0.1)
+                    end
+                end)
+            else
+                local hum = getHum()
+                if hum then hum.WalkSpeed = 16 end
+            end
+        end,
+    })
+
+    PlayerTab:AddSection({ Name = "JumpPower (跳跃力)" })
+    PlayerTab:AddSlider({
+        Name      = "JumpPower Value",
+        Min       = 50, Max = 500, Default = 50, Increment = 1,
+        Flag      = "Generic_JumpPower",
+        Callback  = function(v) miscState.JumpPower = v end,
+    })
+    PlayerTab:AddToggle({
+        Name      = "Enable JumpPower",
+        Default   = false,
+        Flag      = "Generic_JumpPowerEnabled",
+        Callback  = function(s)
+            miscState.SetJumpPower = s
+            if s then
+                task.spawn(function()
+                    while miscState.SetJumpPower do
+                        local hum = getHum()
+                        if hum and hum.Health > 0 and hum.JumpPower ~= miscState.JumpPower then
+                            hum.JumpPower = miscState.JumpPower
+                        end
+                        task.wait(0.1)
+                    end
+                end)
+            else
+                local hum = getHum()
+                if hum then hum.JumpPower = 50 end
+            end
+        end,
+    })
+
+    PlayerTab:AddSection({ Name = "Anti-AFK (防挂机)" })
+    PlayerTab:AddToggle({
+        Name      = "Anti-AFK",
+        Default   = false,
+        Flag      = "Generic_AntiAFK",
+        Callback  = function(s) miscState.AntiAFK = s end,
+    })
+
+    LocalPlayer.Idled:Connect(function()
+        if miscState.AntiAFK then
+            VirtualUser:Button2Down(Vector2.new(0, 0), workspace.CurrentCamera.CFrame)
+            task.wait(1)
+            VirtualUser:Button2Up(Vector2.new(0, 0), workspace.CurrentCamera.CFrame)
+        end
+    end)
+
+    -- ── TAB 3: 杂项 ──
+    local MiscTab = Window:AddTab({
+        Name = "杂项",
+        Icon = "rbxassetid://6031280882",
+    })
+
+    MiscTab:AddSection({ Name = "快捷操作" })
+
+    MiscTab:AddButton({
+        Name = "重生 (Respawn)",
+        Callback = function()
+            if LocalPlayer.Character then
+                LocalPlayer.Character:BreakJoints()
+            end
+        end,
+    })
+
+    MiscTab:AddButton({
+        Name = "清除角色死亡状态",
+        Callback = function()
+            local hum = getHum()
+            if hum and hum.Health <= 0 then
+                LocalPlayer:LoadCharacter()
+            end
+        end,
+    })
+
+    MiscTab:AddButton({
+        Name = "重新注入 Hub",
+        Callback = function()
+            Window:Notify({
+                Title   = "正在重新注入",
+                Content = "请稍候...",
+                Duration = 2,
+                Type    = "Info",
+            })
+            task.wait(1)
+            -- 先销毁当前 UI，再重新加载
+            pcall(function() if coordsConn then coordsConn:Disconnect() end end)
+            if _G.QuantumUI_Window then pcall(function() _G.QuantumUI_Window:Destroy() end) end
+            if _G.QuantumUI_Instance then pcall(function() _G.QuantumUI_Instance:Destroy() end) end
+            _G.LogHub_Loaded = nil
+            _G.QuantumUI_Window = nil
+            _G.QuantumUI_Instance = nil
+            task.wait(0.5)
+            local reloadOk = pcall(function()
+                loadstring(game:HttpGet(GITHUB_BASE .. "/Hub.lua"))()
+            end)
+            if not reloadOk then
+                warn("[Log-Hub] 重新注入失败")
+            end
+        end,
+    })
+
+    MiscTab:AddButton({
+        Name = "加载 Infinite Yield (手动)",
+        Callback = function()
+            task.spawn(function()
+                loadScriptByUrl(
+                    "https://raw.githubusercontent.com/EdgeIY/infiniteyield/master/source",
+                    "Infinite Yield (手动)"
+                )
+            end)
+        end,
+    })
+
+    MiscTab:AddSection({ Name = "说明" })
+
+    MiscTab:AddParagraph({
+        Title   = "通用模式说明",
+        Content = table.concat({
+            "当前游戏未在注册表中，已加载通用脚本：",
+            "",
+            "1. Infinite Yield: 按 RightShift 打开命令行",
+            "   (已后台自动加载，失败可按上方按钮手动加载)",
+            "",
+            "2. 位置/信息 Tab: 实时坐标 + 复制坐标按钮",
+            "",
+            "3. 玩家 Tab: WalkSpeed / JumpPower / Anti-AFK",
+            "",
+            "4. 杂项 Tab: 重生 / 重新注入 Hub",
+        }, "\n"),
+    })
+
+    -- ── 完成通知 ──
+    task.wait(0.3)
+    Window:Notify({
+        Title   = "通用模式已加载",
+        Content = "游戏: " .. GameName .. "\nPlaceId: " .. tostring(PlaceId) ..
+                  "\n\nInfinite Yield (RightShift) +\n坐标获取 / WalkSpeed / JumpPower / Anti-AFK\n按 RightControl 切换 UI",
+        Duration = 7,
+        Type    = "Info",
+    })
+
+    print("[Log-Hub] 通用模式加载完毕 (Game: " .. GameName .. ", PlaceId: " .. tostring(PlaceId) .. ")")
+end
+
+-- ══════════════════════════════════════════════════════════════════
+-- 6. 主流程 - 检测 → 对应游戏脚本 / 通用脚本
 -- ══════════════════════════════════════════════════════════════════
 
 print(string.format("[Log-Hub] 当前游戏: %s (PlaceId: %d)", GameName, PlaceId))
@@ -153,7 +511,7 @@ print(string.format("[Log-Hub] 当前游戏: %s (PlaceId: %d)", GameName, PlaceI
 local detected = detectGame()
 
 if detected then
-    -- 匹配成功 → 直接加载，不询问
+    -- 匹配成功 → 加载对应游戏脚本
     print(string.format("[Log-Hub] 检测到: %s → 正在加载脚本...", detected.Name))
     notify("Log-Hub", "检测到: " .. detected.Name .. "\n正在加载脚本...", 3)
 
@@ -166,7 +524,6 @@ if detected then
         notify("Log-Hub", detected.Name .. " 脚本加载失败", 5)
     end
 else
-    -- 匹配失败 → 通知，不弹任何 UI
-    print("[Log-Hub] 当前游戏不受支持，无需加载脚本")
-    notify("Log-Hub", "当前游戏不受支持\nPlaceId: " .. tostring(PlaceId), 6)
+    -- 匹配失败 → 加载通用脚本 (IY + 杂项)
+    task.spawn(loadGenericScript)
 end
