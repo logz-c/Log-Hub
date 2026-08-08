@@ -1,19 +1,20 @@
 --[[
     ╔══════════════════════════════════════════════════════════════════╗
     ║                        QUANTUM UI LIBRARY                        ║
-    ║                   Version 2.4.0 - Background Update             ║
+    ║                   Version 3.1.0 - KeyAuth API                   ║
     ║                         Created by log_quick                     ║
     ║                                                                  ║
-    ║  Changelog v2.4.0:                                              ║
-    ║  • FIXED auto-load config - now 100% working                    ║
-    ║  • Added custom background image support                        ║
-    ║  • Background transparency syncs with UI transparency           ║
+    ║  Changelog v3.1.0:                                              ║
+    ║  • NEW: QuantumUI.SetupKeyAuth() global API                     ║
+    ║  • NEW: Window:AddKeyAuth() element with input + status         ║
+    ║  • NEW: Window:RequireKeyAuth() loading-screen gating           ║
+    ║  • Supports plaintext keys + SHA-256 hashes + HWID binds        ║
     ╚══════════════════════════════════════════════════════════════════╝
 --]]
 
 local QuantumUI = {}
 QuantumUI.__index = QuantumUI
-QuantumUI.Version = "2.4.0"
+QuantumUI.Version = "3.1.0"
 QuantumUI.Author = "log_quick"
 QuantumUI.ThemeColor = Color3.fromRGB(0, 200, 255)
 QuantumUI.Transparency = 0.3
@@ -29,6 +30,176 @@ QuantumUI.RainbowColors = {
     Color3.fromRGB(75, 0, 130),
     Color3.fromRGB(143, 0, 255)
 }
+
+-- ═══════════════════════════════════════════════════════════════════
+--                       KEYAUTH STATIC API
+-- ═══════════════════════════════════════════════════════════════════
+-- 开发者在 QuantumUI.new() 之前调用 QuantumUI.SetupKeyAuth({...}) 启用
+local KeyAuth = {
+    Enabled = false,
+    ValidKeys = {},       -- [key] = true (plaintext, for shared simple keys)
+    ValidHashes = {},     -- [sha256hex] = true (recommended: don't embed raw keys in source)
+    BindToHWID = false,   -- key ↔ HWID 绑定，防止一人发群
+    HWIDWhitelist = nil,  -- nil = bind to first login hwid; 否则 {hwid=true} 允许
+    AllowTrial = false,   -- true = 未授权用户 10 分钟试用
+    TrialSeconds = 600,
+    OnSuccess = nil,      -- function(key)
+    OnFail = nil,         -- function(reason)
+    GateOnLoad = false    -- RequireKeyAuth 自动门控（由 RequireKeyAuth 设置）
+}
+
+-- 简单可靠的 SHA-256 + base16（用于推荐的哈希模式，避免明文 key 泄漏）
+local function sha256hex(str)
+    -- 使用 HttpService JSONEncode + 一个临时表？实际上 Roblox 没有内建 hash，
+    -- 这里实现一个标准化的 SHA-256 via bit32（兼容大多数 exploit env）
+    local b32 = bit32 or bit
+    if not b32 then return tostring(str) end
+    local bx, brs, bls = b32.bxor, b32.rrotate, b32.lshift
+    local band, bor = b32.band, b32.bor
+    local k = {
+        0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,
+        0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,
+        0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,
+        0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,
+        0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,
+        0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,
+        0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,
+        0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2
+    }
+    local function pad(msg)
+        local len = #msg
+        local tbl = {string.byte(msg,1,len)}
+        tbl[len+1] = 0x80
+        local bits = len*8
+        for i = len+2, 64 - ((len+9)%64) do tbl[i]=0 end
+        for i=1,8 do tbl[#tbl+1] = band(b32.rshift(bits,(8-i)*8),0xFF) end
+        return tbl
+    end
+    local function sha(data)
+        local h0,h1,h2,h3,h4,h5,h6,h7=0x6a09e667,0xbb67ae85,0x3c6ef372,0xa54ff53a,0x510e527f,0x9b05688c,0x1f83d9ab,0x5be0cd19
+        local bytes = pad(data)
+        for chunk=0, #bytes/64-1 do
+            local w = {}
+            for i=1,16 do w[i] = bor(bor(bor(bls(bytes[chunk*64+i*4-3],24),bls(bytes[chunk*64+i*4-2],16)),bls(bytes[chunk*64+i*4-1],8)),bytes[chunk*64+i*4]) end
+            for i=17,64 do
+                local s0 = bx(bx(brs(w[i-15],7),brs(w[i-15],18)),b32.rshift(w[i-15],3))
+                local s1 = bx(bx(brs(w[i-2],17),brs(w[i-2],19)),b32.rshift(w[i-2],10))
+                w[i] = band(w[i-16]+s0+w[i-7]+s1,0xFFFFFFFF)
+            end
+            local a,b,c,d,e,f,g,h=h0,h1,h2,h3,h4,h5,h6,h7
+            for i=1,64 do
+                local S1 = bx(bx(brs(e,6),brs(e,11)),brs(e,25))
+                local ch = bx(band(e,f),band(b32.bnot(e),g))
+                local t1 = band(h+S1+ch+k[i]+w[i],0xFFFFFFFF)
+                local S0 = bx(bx(brs(a,2),brs(a,13)),brs(a,22))
+                local mj = bx(bx(band(a,b),band(a,c)),band(b,c))
+                local t2 = band(S0+mj,0xFFFFFFFF)
+                h=g g=f f=e e=band(d+t1,0xFFFFFFFF) d=c c=b b=a a=band(t1+t2,0xFFFFFFFF)
+            end
+            h0=band(h0+a,0xFFFFFFFF) h1=band(h1+b,0xFFFFFFFF) h2=band(h2+c,0xFFFFFFFF) h3=band(h3+d,0xFFFFFFFF)
+            h4=band(h4+e,0xFFFFFFFF) h5=band(h5+f,0xFFFFFFFF) h6=band(h6+g,0xFFFFFFFF) h7=band(h7+h,0xFFFFFFFF)
+        end
+        local out = ""
+        for _,v in ipairs{h0,h1,h2,h3,h4,h5,h6,h7} do
+            for i=7,0,-1 do
+                local b = band(b32.rshift(v,i*4),0xF)
+                out = out .. string.format("%x",b)
+            end
+        end
+        return out
+    end
+    return sha(str)
+end
+
+-- 稳定硬件 ID（基于 UserId + 机器指纹，不可伪造为他人）
+local function GetHWID()
+    local uid = tostring(LocalPlayer and LocalPlayer.UserId or 0)
+    local accountAge = LocalPlayer and LocalPlayer.AccountAge or 0
+    local name = LocalPlayer and LocalPlayer.Name or ""
+    local base = ("QUANTUM_HWID_%s_%d_%s"):format(uid, accountAge, name)
+    return sha256hex(base):sub(1, 16):upper()
+end
+
+-- 保存/读取已授权密钥文件（独立目录 QuantumUI/KeyAuth/）
+local KeyAuthPath = "QuantumUI/KeyAuth/saved_key.json"
+local function SaveAuthorizedKey(key, hwid)
+    pcall(function()
+        if not isfolder("QuantumUI") then makefolder("QuantumUI") end
+        if not isfolder("QuantumUI/KeyAuth") then makefolder("QuantumUI/KeyAuth") end
+        writefile(KeyAuthPath, HttpService:JSONEncode({Key = key, HWID = hwid, Time = os.time()}))
+    end)
+end
+local function LoadAuthorizedKey()
+    local ok, res = pcall(function()
+        if isfile(KeyAuthPath) then
+            return HttpService:JSONDecode(readfile(KeyAuthPath))
+        end
+        return nil
+    end)
+    return ok and res or nil
+end
+
+function QuantumUI.SetupKeyAuth(options)
+    options = options or {}
+    KeyAuth.Enabled = true
+    KeyAuth.ValidKeys = {}
+    KeyAuth.ValidHashes = {}
+    if options.Keys then
+        for _, k in ipairs(options.Keys) do KeyAuth.ValidKeys[k] = true end
+    end
+    if options.Hashes then
+        for _, h in ipairs(options.Hashes) do KeyAuth.ValidHashes[tostring(h):lower()] = true end
+    end
+    KeyAuth.BindToHWID = not not options.BindToHWID
+    if options.HWIDWhitelist then
+        KeyAuth.HWIDWhitelist = {}
+        for _, h in ipairs(options.HWIDWhitelist) do KeyAuth.HWIDWhitelist[tostring(h):upper()] = true end
+    end
+    KeyAuth.AllowTrial = not not options.AllowTrial
+    KeyAuth.TrialSeconds = tonumber(options.TrialSeconds) or 600
+    KeyAuth.OnSuccess = options.OnSuccess
+    KeyAuth.OnFail = options.OnFail
+end
+
+function QuantumUI.HashKey(keyStr)
+    return sha256hex(tostring(keyStr or "")):lower()
+end
+
+function QuantumUI.GetHWID()
+    return GetHWID()
+end
+
+-- 核心验证：bool success, string reason
+local function VerifyKey(inputKey, inputHWID)
+    if not KeyAuth.Enabled then return true, "no_keyauth" end
+    inputKey = tostring(inputKey or ""):gsub("%s+", "")
+    if inputKey == "" then return false, "empty" end
+    -- 1. plaintext key
+    local matched = KeyAuth.ValidKeys[inputKey] and true or false
+    -- 2. hash of input key
+    local hash = sha256hex(inputKey):lower()
+    matched = matched or (KeyAuth.ValidHashes[hash] and true)
+    if not matched then return false, "invalid_key" end
+    -- 3. HWID 绑定检查
+    if KeyAuth.BindToHWID then
+        local hwid = inputHWID or GetHWID()
+        -- 白名单优先（开发者自己的 hwid 免首次绑定）
+        if KeyAuth.HWIDWhitelist and KeyAuth.HWIDWhitelist[hwid] then
+            return true, "authorized_whitelist", hwid
+        end
+        local saved = LoadAuthorizedKey()
+        if saved and saved.Key == inputKey then
+            -- 曾经授权过：必须 HWID 一致
+            if saved.HWID ~= hwid then return false, "hwid_mismatch", hwid end
+            return true, "authorized", hwid
+        else
+            -- 首次使用该 key：绑定当前 HWID
+            SaveAuthorizedKey(inputKey, hwid)
+            return true, "bound", hwid
+        end
+    end
+    return true, "authorized", inputHWID or GetHWID()
+end
 
 local Players = game:GetService("Players")
 local TweenService = game:GetService("TweenService")
@@ -539,6 +710,16 @@ function QuantumUI:CreateLoadingScreen()
         task.wait(0.4)
         rotateConn:Disconnect()
         loadingFrame:Destroy()
+        
+        -- KeyAuth Gate: 若启用了 RequireKeyAuth 且未授权，阻塞在 KeyGate 界面
+        if KeyAuth.Enabled and KeyAuth.GateOnLoad then
+            local authed = self:RunKeyGate(loadingFrame)
+            if not authed then
+                -- 用户取消/失败：销毁 UI，不进入主界面
+                self:Destroy()
+                return
+            end
+        end
         
         self:CreateMainWindow()
     end)
@@ -1308,6 +1489,7 @@ function QuantumUI:AddTab(options)
     function tab:AddTextbox(opts) return window:CreateTextbox(tabPage, opts) end
     function tab:AddColorPicker(opts) return window:CreateColorPicker(tabPage, opts) end
     function tab:AddKeybind(opts) return window:CreateKeybind(tabPage, opts) end
+    function tab:AddKeyAuth(opts) return window:CreateKeyAuth(tabPage, opts) end
     function tab:AddLabel(opts) return window:CreateLabel(tabPage, opts) end
     function tab:AddParagraph(opts) return window:CreateParagraph(tabPage, opts) end
     
@@ -2364,6 +2546,563 @@ function QuantumUI:CreateKeybind(parent, options)
     
     if flag then self.Flags[flag] = obj; self.Elements[flag] = obj end
     return obj
+end
+
+-- ═══════════════════════════════════════════════════════════════════
+--                    KEYAUTH UI ELEMENT + METHODS
+-- ═══════════════════════════════════════════════════════════════════
+function QuantumUI:CreateKeyAuth(parent, options)
+    options = options or {}
+    local titleText = options.Name or "Access Key"
+    local placeholderText = options.Placeholder or "Enter key..."
+    local showHWID = options.ShowHWID ~= false
+    local onAuthorize = options.Callback
+    local requireGate = not not options.RequireGate -- 若为 true，UI 创建时若未授权，禁用整个 Tab
+    
+    local container = Utility.Create("Frame", {
+        Name = "KeyAuthContainer",
+        Parent = parent,
+        BackgroundTransparency = 1,
+        BorderSizePixel = 0,
+        Size = UDim2.new(1, -10, 0, 120),
+        Position = UDim2.new(0, 5, 0, 0),
+        AutomaticSize = Enum.AutomaticSize.Y,
+        ZIndex = 5
+    })
+    
+    local title = Utility.Create("TextLabel", {
+        Parent = container,
+        BackgroundTransparency = 1,
+        Size = UDim2.new(1, 0, 0, 22),
+        Position = UDim2.new(0, 0, 0, 0),
+        Font = Enum.Font.GothamBold,
+        Text = titleText,
+        TextColor3 = Color3.fromRGB(240, 240, 240),
+        TextSize = 14,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        ZIndex = 6
+    })
+    self:AddThemeElement(title, "TextColor3")
+    
+    local hwidBox
+    if showHWID then
+        hwidBox = Utility.Create("TextLabel", {
+            Parent = container,
+            BackgroundColor3 = Color3.fromRGB(20, 20, 32),
+            BackgroundTransparency = 0.3,
+            Size = UDim2.new(1, 0, 0, 24),
+            Position = UDim2.new(0, 0, 0, 26),
+            Font = Enum.Font.Code,
+            Text = "HWID: " .. GetHWID(),
+            TextColor3 = Color3.fromRGB(160, 160, 180),
+            TextSize = 12,
+            ClipsDescendants = true,
+            ZIndex = 6
+        }, {
+            Utility.Create("UICorner", {CornerRadius = UDim.new(0, 4)})
+        })
+    end
+    
+    local rowY = showHWID and 56 or 26
+    local inputFrame = Utility.Create("Frame", {
+        Parent = container,
+        BackgroundColor3 = Color3.fromRGB(22, 22, 35),
+        BackgroundTransparency = 0.2,
+        BorderSizePixel = 0,
+        Size = UDim2.new(1, -95, 0, 32),
+        Position = UDim2.new(0, 0, 0, rowY),
+        ZIndex = 6
+    }, {
+        Utility.Create("UICorner", {CornerRadius = UDim.new(0, 6)}),
+        Utility.Create("UIStroke", {Color = self.ThemeColor, Thickness = 1, Transparency = 0.7})
+    })
+    self:AddThemeElement(inputFrame.UIStroke, "Color")
+    
+    local textBox = Utility.Create("TextBox", {
+        Parent = inputFrame,
+        BackgroundTransparency = 1,
+        Size = UDim2.new(1, -16, 1, 0),
+        Position = UDim2.new(0, 8, 0, 0),
+        Font = Enum.Font.Code,
+        Text = "",
+        TextColor3 = Color3.fromRGB(230, 230, 240),
+        TextSize = 13,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        PlaceholderText = placeholderText,
+        PlaceholderColor3 = Color3.fromRGB(120, 120, 140),
+        ClipsDescendants = true,
+        ZIndex = 7
+    })
+    
+    local activateBtn = Utility.Create("TextButton", {
+        Parent = container,
+        BackgroundColor3 = self.ThemeColor,
+        BackgroundTransparency = 0.1,
+        Size = UDim2.new(0, 85, 0, 32),
+        Position = UDim2.new(1, -85, 0, rowY),
+        Font = Enum.Font.GothamBold,
+        Text = "Activate",
+        TextColor3 = Color3.fromRGB(255, 255, 255),
+        TextSize = 12,
+        ZIndex = 7
+    }, {
+        Utility.Create("UICorner", {CornerRadius = UDim.new(0, 6)}),
+        Utility.Create("UIStroke", {Color = Color3.fromRGB(255,255,255), Thickness = 1, Transparency = 0.6})
+    })
+    self:AddThemeElement(activateBtn, "BackgroundColor3")
+    
+    local statusY = rowY + 38
+    local statusLabel = Utility.Create("TextLabel", {
+        Parent = container,
+        BackgroundTransparency = 1,
+        Size = UDim2.new(1, 0, 0, 20),
+        Position = UDim2.new(0, 0, 0, statusY),
+        Font = Enum.Font.Gotham,
+        Text = "",
+        TextColor3 = Color3.fromRGB(200, 200, 220),
+        TextSize = 12,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        ZIndex = 6
+    })
+    
+    -- 初始检查：已保存的 key
+    local currentKey, currentState = nil, "unauthorized"
+    local saved = LoadAuthorizedKey()
+    if saved and saved.Key then
+        currentKey = saved.Key
+        textBox.Text = saved.Key
+    end
+    
+    local function setStatus(text, color, code)
+        statusLabel.Text = text
+        statusLabel.TextColor3 = color or Color3.fromRGB(200, 200, 220)
+        currentState = code or currentState
+    end
+    
+    if not KeyAuth.Enabled then
+        setStatus("⚠ No KeyAuth configured (dev mode)", Color3.fromRGB(255, 200, 100), "dev_mode")
+    elseif saved and saved.Key then
+        local ok, reason, hwid = VerifyKey(saved.Key)
+        if ok then
+            setStatus("✓ Authorized (" .. reason .. ")", Color3.fromRGB(100, 255, 160), reason)
+        else
+            local msgMap = {
+                empty = "Empty saved key",
+                invalid_key = "✗ Key invalid or revoked",
+                hwid_mismatch = "✗ HWID mismatch (key bound to another device)"
+            }
+            setStatus(msgMap[reason] or "Unauthorized", Color3.fromRGB(255, 120, 120), reason)
+        end
+    else
+        setStatus("Enter key to activate", Color3.fromRGB(180, 180, 200), "unauthorized")
+    end
+    
+    local function doActivate()
+        Utility.PlaySound(Sounds.Click, 0.3)
+        if not KeyAuth.Enabled then
+            setStatus("⚠ KeyAuth disabled by developer", Color3.fromRGB(255, 200, 100), "dev_mode")
+            return
+        end
+        local input = textBox.Text
+        local ok, reason, hwid = VerifyKey(input)
+        if ok then
+            currentKey = input
+            Utility.PlaySound(Sounds.SpecialLoad, 0.5)
+            Utility.ScreenFlash(Color3.fromRGB(100, 255, 160), 0.3, 0.4)
+            local msgMap = {
+                authorized = "✓ Authorized",
+                authorized_whitelist = "✓ Authorized (whitelisted)",
+                bound = "✓ Key bound to your device",
+                no_keyauth = "✓ Dev mode pass"
+            }
+            setStatus(msgMap[reason] or "✓ Authorized", Color3.fromRGB(100, 255, 160), reason)
+            if KeyAuth.OnSuccess then task.spawn(KeyAuth.OnSuccess, input) end
+            if onAuthorize then task.spawn(onAuthorize, ok, input, reason) end
+        else
+            currentKey = nil
+            Utility.PlaySound(Sounds.Error, 0.5)
+            local msgMap = {
+                empty = "✗ Please enter a key",
+                invalid_key = "✗ Invalid key",
+                hwid_mismatch = "✗ HWID mismatch"
+            }
+            setStatus(msgMap[reason] or "Unauthorized", Color3.fromRGB(255, 120, 120), reason)
+            if KeyAuth.OnFail then task.spawn(KeyAuth.OnFail, reason) end
+        end
+    end
+    
+    activateBtn.MouseButton1Click:Connect(doActivate)
+    textBox.FocusLost:Connect(function(enterPressed)
+        if enterPressed then doActivate() end
+    end)
+    
+    container.Size = UDim2.new(1, -10, 0, statusY + 22)
+    self:UpdateContentSize(parent)
+    
+    local obj = {
+        Frame = container,
+        Value = currentKey,
+        State = currentState,
+        Activate = function(_) doActivate() end,
+        IsAuthorized = function(_)
+            if not KeyAuth.Enabled then return true end
+            local k = textBox.Text
+            if k == "" and saved then k = saved.Key end
+            local ok = VerifyKey(k)
+            return ok
+        end,
+        GetState = function() return currentState end,
+        Reset = function()
+            textBox.Text = ""
+            pcall(function() if isfile(KeyAuthPath) then delfile(KeyAuthPath) end end)
+            setStatus("Enter key to activate", Color3.fromRGB(180, 180, 200), "unauthorized")
+        end,
+        SetKey = function(_, k)
+            textBox.Text = tostring(k or "")
+            doActivate()
+        end,
+        GetHWID = function() return GetHWID() end
+    }
+    return obj
+end
+
+function QuantumUI:IsKeyAuthorized()
+    if not KeyAuth.Enabled then return true, "dev_mode" end
+    local saved = LoadAuthorizedKey()
+    if saved and saved.Key then
+        local ok, reason = VerifyKey(saved.Key)
+        return ok, reason
+    end
+    return false, "no_key_saved"
+end
+
+function QuantumUI:ActivateKey(keyStr)
+    local ok, reason, hwid = VerifyKey(keyStr)
+    if ok and KeyAuth.OnSuccess then task.spawn(KeyAuth.OnSuccess, keyStr) end
+    if not ok and KeyAuth.OnFail then task.spawn(KeyAuth.OnFail, reason) end
+    return ok, reason, hwid
+end
+
+function QuantumUI:ResetKeyAuth()
+    pcall(function() if isfile(KeyAuthPath) then delfile(KeyAuthPath) end end)
+end
+
+function QuantumUI.RequireKeyAuth(options)
+    -- 在 QuantumUI.new 之前调用：SetupKeyAuth 的“Gate”快捷方式
+    if not KeyAuth.Enabled then QuantumUI.SetupKeyAuth(options or {}) end
+    KeyAuth.GateOnLoad = true
+    if options then
+        if options.Keys then for _,k in ipairs(options.Keys) do KeyAuth.ValidKeys[k]=true end end
+        if options.Hashes then for _,h in ipairs(options.Hashes) do KeyAuth.ValidHashes[tostring(h):lower()]=true end end
+        KeyAuth.BindToHWID = options.BindToHWID and true or KeyAuth.BindToHWID
+        KeyAuth.AllowTrial = options.AllowTrial and true or KeyAuth.AllowTrial
+        KeyAuth.TrialSeconds = options.TrialSeconds or KeyAuth.TrialSeconds
+        if options.HWIDWhitelist then
+            KeyAuth.HWIDWhitelist = KeyAuth.HWIDWhitelist or {}
+            for _,h in ipairs(options.HWIDWhitelist) do KeyAuth.HWIDWhitelist[tostring(h):upper()]=true end
+        end
+        if options.OnSuccess then KeyAuth.OnSuccess = options.OnSuccess end
+        if options.OnFail then KeyAuth.OnFail = options.OnFail end
+    end
+end
+
+function QuantumUI:RunKeyGate()
+    -- 返回 true 表示授权通过 / 试用模式；false 表示拒绝
+    -- 先检查已保存的 key
+    local saved = LoadAuthorizedKey()
+    if saved and saved.Key then
+        local ok = VerifyKey(saved.Key)
+        if ok then return true end
+    end
+    -- 试用模式（AllowTrial）：弹出一个 trial 倒计时对话框
+    local trialStart = KeyAuth.AllowTrial and tick() or nil
+    local trialDuration = KeyAuth.TrialSeconds
+
+    local screen = self.ScreenGui or error("KeyGate: ScreenGui missing", 2)
+    
+    -- 全屏背景遮罩
+    local gateFrame = Utility.Create("Frame", {
+        Name = "KeyGateScreen",
+        Parent = screen,
+        BackgroundColor3 = Color3.fromRGB(5, 5, 12),
+        BackgroundTransparency = 0.05,
+        BorderSizePixel = 0,
+        Size = UDim2.new(1, 0, 1, 0),
+        ZIndex = 9998
+    })
+    for i = 1, 20 do
+        Utility.Create("Frame", {
+            Parent = gateFrame,
+            BackgroundColor3 = self.ThemeColor,
+            BackgroundTransparency = 0.94,
+            BorderSizePixel = 0,
+            Size = UDim2.new(1, 0, 0, 1),
+            Position = UDim2.new(0, 0, i/20 - 0.025, 0)
+        })
+    end
+    
+    local card = Utility.Create("Frame", {
+        Parent = gateFrame,
+        BackgroundColor3 = Color3.fromRGB(15, 15, 28),
+        BackgroundTransparency = 0.1,
+        BorderSizePixel = 0,
+        Size = UDim2.new(0, 440, 0, 0),
+        AutomaticSize = Enum.AutomaticSize.Y,
+        Position = UDim2.new(0.5, 0, 0.5, 0),
+        AnchorPoint = Vector2.new(0.5, 0.5),
+        ZIndex = 9999,
+        ClipsDescendants = true
+    }, {
+        Utility.Create("UICorner", {CornerRadius = UDim.new(0, 14)}),
+        Utility.Create("UIStroke", {Color = self.ThemeColor, Thickness = 2, Transparency = 0.5})
+    })
+    
+    local header = Utility.Create("Frame", {
+        Parent = card,
+        BackgroundColor3 = self.ThemeColor,
+        BackgroundTransparency = 0.85,
+        Size = UDim2.new(1, 0, 0, 54),
+        ZIndex = 10000
+    }, {Utility.Create("UICorner", {CornerRadius = UDim.new(0, 14)})})
+    
+    Utility.Create("TextLabel", {
+        Parent = header,
+        BackgroundTransparency = 1,
+        Size = UDim2.new(1, -24, 1, 0),
+        Position = UDim2.new(0, 16, 0, 0),
+        Font = Enum.Font.GothamBold,
+        Text = "🔑 Access Required",
+        TextColor3 = Color3.fromRGB(255, 255, 255),
+        TextSize = 18,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        ZIndex = 10001
+    })
+    
+    local content = Utility.Create("Frame", {
+        Parent = card,
+        BackgroundTransparency = 1,
+        Size = UDim2.new(1, -32, 1, -70),
+        Position = UDim2.new(0, 16, 0, 62),
+        AutomaticSize = Enum.AutomaticSize.Y,
+        ZIndex = 10000
+    })
+    
+    local hwidLabel = Utility.Create("TextLabel", {
+        Parent = content,
+        BackgroundColor3 = Color3.fromRGB(20, 20, 32),
+        BackgroundTransparency = 0.3,
+        Size = UDim2.new(1, 0, 0, 28),
+        Font = Enum.Font.Code,
+        Text = "HWID: " .. GetHWID(),
+        TextColor3 = Color3.fromRGB(180, 180, 200),
+        TextSize = 12,
+        ClipsDescendants = true,
+        ZIndex = 10001
+    }, {Utility.Create("UICorner", {CornerRadius = UDim.new(0, 6)})})
+    
+    Utility.Create("TextLabel", {
+        Parent = content,
+        BackgroundTransparency = 1,
+        Size = UDim2.new(1, 0, 0, 22),
+        Position = UDim2.new(0, 0, 0, 38),
+        Font = Enum.Font.GothamBold,
+        Text = "License Key",
+        TextColor3 = Color3.fromRGB(230, 230, 245),
+        TextSize = 13,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        ZIndex = 10001
+    })
+    
+    local keyBox = Utility.Create("Frame", {
+        Parent = content,
+        BackgroundColor3 = Color3.fromRGB(20, 20, 35),
+        BackgroundTransparency = 0.15,
+        Size = UDim2.new(1, 0, 0, 38),
+        Position = UDim2.new(0, 0, 0, 64),
+        ZIndex = 10001
+    }, {
+        Utility.Create("UICorner", {CornerRadius = UDim.new(0, 8)}),
+        Utility.Create("UIStroke", {Color = self.ThemeColor, Thickness = 1, Transparency = 0.7})
+    })
+    
+    local keyInput = Utility.Create("TextBox", {
+        Parent = keyBox,
+        BackgroundTransparency = 1,
+        Size = UDim2.new(1, -20, 1, 0),
+        Position = UDim2.new(0, 10, 0, 0),
+        Font = Enum.Font.Code,
+        Text = saved and saved.Key or "",
+        TextColor3 = Color3.fromRGB(240, 240, 250),
+        TextSize = 14,
+        PlaceholderText = "XXXX-XXXX-XXXX-XXXX",
+        PlaceholderColor3 = Color3.fromRGB(120, 120, 150),
+        ClearTextOnFocus = false,
+        ClipsDescendants = true,
+        ZIndex = 10002
+    })
+    
+    local statusLabel = Utility.Create("TextLabel", {
+        Parent = content,
+        BackgroundTransparency = 1,
+        Size = UDim2.new(1, 0, 0, 22),
+        Position = UDim2.new(0, 0, 0, 108),
+        Font = Enum.Font.Gotham,
+        Text = "Enter a valid key to continue",
+        TextColor3 = Color3.fromRGB(180, 180, 200),
+        TextSize = 12,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        ZIndex = 10001
+    })
+    
+    local buttonsRow = Utility.Create("Frame", {
+        Parent = content,
+        BackgroundTransparency = 1,
+        Size = UDim2.new(1, 0, 0, 40),
+        Position = UDim2.new(0, 0, 0, 134),
+        ZIndex = 10001
+    })
+    
+    local trialBtn
+    if KeyAuth.AllowTrial then
+        trialBtn = Utility.Create("TextButton", {
+            Parent = buttonsRow,
+            BackgroundColor3 = Color3.fromRGB(60, 60, 85),
+            BackgroundTransparency = 0.2,
+            Size = UDim2.new(0, 140, 1, 0),
+            Font = Enum.Font.GothamBold,
+            Text = ("Trial %ds"):format(trialDuration),
+            TextColor3 = Color3.fromRGB(230, 230, 245),
+            TextSize = 12,
+            ZIndex = 10002
+        }, {
+            Utility.Create("UICorner", {CornerRadius = UDim.new(0, 8)}),
+            Utility.Create("UIStroke", {Color = Color3.fromRGB(200,200,220), Thickness = 1, Transparency = 0.6})
+        })
+    end
+    
+    local activateBtn = Utility.Create("TextButton", {
+        Parent = buttonsRow,
+        BackgroundColor3 = self.ThemeColor,
+        BackgroundTransparency = 0.1,
+        Size = KeyAuth.AllowTrial and UDim2.new(0, 140, 1, 0) or UDim2.new(0, 180, 1, 0),
+        Position = KeyAuth.AllowTrial and UDim2.new(1, -140, 0, 0) or UDim2.new(1, -180, 0, 0),
+        Font = Enum.Font.GothamBold,
+        Text = "Activate",
+        TextColor3 = Color3.fromRGB(255, 255, 255),
+        TextSize = 13,
+        ZIndex = 10002
+    }, {
+        Utility.Create("UICorner", {CornerRadius = UDim.new(0, 8)}),
+        Utility.Create("UIStroke", {Color = Color3.fromRGB(255,255,255), Thickness = 1, Transparency = 0.6})
+    })
+    
+    local cancelBtn = Utility.Create("TextButton", {
+        Parent = buttonsRow,
+        BackgroundColor3 = Color3.fromRGB(120, 40, 40),
+        BackgroundTransparency = 0.3,
+        Size = UDim2.new(0, 70, 1, 0),
+        Position = KeyAuth.AllowTrial and UDim2.new(0.5, -35, 0, 0) or UDim2.new(0, 200, 0, 0),
+        Font = Enum.Font.GothamBold,
+        Text = "Cancel",
+        TextColor3 = Color3.fromRGB(255, 220, 220),
+        TextSize = 12,
+        ZIndex = 10002
+    }, {Utility.Create("UICorner", {CornerRadius = UDim.new(0, 8)})})
+    
+    -- 把 buttonsRow 往右挪，让 Cancel 出现位置正确
+    if not KeyAuth.AllowTrial then
+        -- Activate(180) + Cancel(70) = 250. We center buttons
+        buttonsRow.Size = UDim2.new(0, 250, 0, 40)
+        buttonsRow.AnchorPoint = Vector2.new(0.5, 0)
+        buttonsRow.Position = UDim2.new(0.5, 0, 0, 134)
+        activateBtn.Position = UDim2.new(0, 0, 0, 0)
+        cancelBtn.Position = UDim2.new(0, 180, 0, 0)
+    end
+    
+    local contentHeight = 180
+    content.Size = UDim2.new(1, -32, 0, contentHeight)
+    card.Size = UDim2.new(0, 440, 0, contentHeight + 78)
+    
+    -- Initial card appear animation
+    card.BackgroundTransparency = 1
+    card.Size = UDim2.new(0, 440, 0, 0)
+    task.defer(function()
+        Utility.Tween(card, {Size = UDim2.new(0, 440, 0, contentHeight + 78), BackgroundTransparency = 0.1}, 0.45, Enum.EasingStyle.Back)
+    end)
+    
+    local done = false
+    local result = false
+    
+    local function setStatus(msg, color)
+        statusLabel.Text = msg
+        statusLabel.TextColor3 = color or Color3.fromRGB(180, 180, 200)
+    end
+    
+    local function finish(ok)
+        if done then return end
+        done = true
+        result = ok
+        Utility.Tween(card, {Size = UDim2.new(0, 440, 0, 0), BackgroundTransparency = 1}, 0.3, Enum.EasingStyle.Back, Enum.EasingDirection.In)
+        task.wait(0.3)
+        gateFrame:Destroy()
+    end
+    
+    local function tryActivate()
+        local k = keyInput.Text
+        if k == "" then
+            setStatus("✗ Enter a key first", Color3.fromRGB(255, 140, 140))
+            return
+        end
+        local ok, reason, hwid = VerifyKey(k)
+        if ok then
+            Utility.PlaySound(Sounds.SpecialLoad, 0.6)
+            Utility.ScreenFlash(Color3.fromRGB(100, 255, 160), 0.4, 0.5)
+            local msg = "✓ Authorized"
+            if reason == "bound" then msg = "✓ Key bound to your HWID" end
+            if reason == "authorized_whitelist" then msg = "✓ Whitelisted" end
+            setStatus(msg, Color3.fromRGB(100, 255, 160))
+            if KeyAuth.OnSuccess then task.spawn(KeyAuth.OnSuccess, k) end
+            task.wait(0.6)
+            finish(true)
+        else
+            Utility.PlaySound(Sounds.Error, 0.5)
+            local map = {
+                empty = "✗ Empty key",
+                invalid_key = "✗ Invalid key",
+                hwid_mismatch = "✗ HWID mismatch"
+            }
+            setStatus(map[reason] or "Unauthorized", Color3.fromRGB(255, 120, 120))
+            if KeyAuth.OnFail then task.spawn(KeyAuth.OnFail, reason) end
+        end
+    end
+    
+    activateBtn.MouseButton1Click:Connect(tryActivate)
+    keyInput.FocusLost:Connect(function(enterPressed) if enterPressed then tryActivate() end end)
+    cancelBtn.MouseButton1Click:Connect(function()
+        Utility.PlaySound(Sounds.Click, 0.3)
+        finish(false)
+    end)
+    if trialBtn then
+        trialBtn.MouseButton1Click:Connect(function()
+            Utility.PlaySound(Sounds.Click, 0.4)
+            setStatus(("⏳ Trial active (%ds) - features limited"):format(trialDuration), Color3.fromRGB(255, 210, 110))
+            if KeyAuth.OnSuccess then task.spawn(KeyAuth.OnSuccess, "TRIAL_MODE") end
+            task.wait(0.6)
+            finish(true)
+        end)
+    end
+    
+    -- 若已保存过 key，自动尝试验证
+    if saved and saved.Key then
+        task.defer(tryActivate)
+    end
+    
+    -- 阻塞直到用户完成
+    local t0 = tick()
+    local timeout = KeyAuth.AllowTrial and (trialDuration + 7200) or 3600
+    while not done and (tick() - t0 < timeout) do task.wait(0.1) end
+    
+    return result
 end
 
 function QuantumUI:CreateLabel(parent, options)

@@ -42,7 +42,38 @@ end
 print("[API Demo] Quantum UI v" .. QuantumUI.Version .. " 加载成功")
 
 -- ══════════════════════════════════════════════════════════════
--- 2. CREATE MAIN WINDOW
+-- 2. KEY AUTH — 可选：启用密钥授权（脚本开发者使用）
+-- ══════════════════════════════════════════════════════════════
+-- 方式 A: 启动时强制门控（未授权弹窗阻塞，直到通过/Cancel 销毁 UI）
+-- QuantumUI.RequireKeyAuth({
+--     -- 推荐哈希模式：key 放源码里别人搜不到
+--     Hashes = {
+--         -- 用 QuantumUI.HashKey("DEMO-KEY-1234") 预生成：
+--         QuantumUI.HashKey("QUANTUM-2024-ALPHA-001"),
+--         QuantumUI.HashKey("QUANTUM-2024-ALPHA-002"),
+--     },
+--     BindToHWID = true,      -- 首次激活绑定 HWID（防止一人发群）
+--     AllowTrial = true,      -- 允许试用
+--     TrialSeconds = 600,     -- 试用时长 10 分钟
+--     HWIDWhitelist = {       -- 开发者自己的 HWID 免绑定
+--         -- QuantumUI.GetHWID() 可以在控制台打印自己的 HWID
+--     },
+--     OnSuccess = function(key)
+--         print("[KeyAuth] 授权成功, key =", key)
+--     end,
+--     OnFail = function(reason)
+--         warn("[KeyAuth] 授权失败:", reason)
+--     end,
+-- })
+--
+-- 方式 B: 先 SetupKeyAuth（不强制 gate），在界面里 AddKeyAuth 元素让用户输入
+-- QuantumUI.SetupKeyAuth({
+--     Keys = {"PLAINTEXT-KEY-EXAMPLE"},
+--     BindToHWID = true,
+-- })
+
+-- ══════════════════════════════════════════════════════════════
+-- 3. CREATE MAIN WINDOW
 -- ══════════════════════════════════════════════════════════════
 local Window = QuantumUI.new({
     Title = "Quantum API Demo",
@@ -340,7 +371,83 @@ ToolsTab:AddButton({
 })
 
 -- ══════════════════════════════════════════════════════════════
--- 7. 完成
+-- 7. KEY AUTH TAB - 密钥输入 / HWID 展示（配合 QuantumUI.SetupKeyAuth 使用）
+-- ══════════════════════════════════════════════════════════════
+local KeyAuthTab = Window:AddTab({
+    Name = "Access",
+    Icon = "rbxassetid://6034284153",
+})
+
+KeyAuthTab:AddSection({ Name = "Section: 密钥授权" })
+
+local keyAuthEl = KeyAuthTab:AddKeyAuth({
+    Name = "密钥激活",
+    Placeholder = "QUANTUM-XXXX-XXXX-XXXX",
+    ShowHWID = true,
+    Callback = function(ok, key, reason)
+        print("[API Demo] AddKeyAuth 回调:", ok, key, reason)
+        if ok then
+            Window:Notify({
+                Title = "授权成功",
+                Content = "密钥已通过验证",
+                Duration = 4,
+                Type = "Success",
+            })
+        else
+            Window:Notify({
+                Title = "授权失败",
+                Content = "请检查密钥是否正确",
+                Duration = 4,
+                Type = "Error",
+            })
+        end
+    end,
+})
+
+KeyAuthTab:AddButton({
+    Name = "打印当前 HWID (控制台)",
+    Callback = function()
+        print("[API Demo] 当前 HWID:", QuantumUI.GetHWID())
+        print("[API Demo] 是否授权:", Window:IsKeyAuthorized())
+    end,
+})
+
+KeyAuthTab:AddButton({
+    Name = "预生成哈希 (HashKey 示例)",
+    Callback = function()
+        local samples = {
+            "QUANTUM-2024-ALPHA-001",
+            "QUANTUM-2024-ALPHA-002",
+        }
+        print("[API Demo] —— 预生成的 SHA-256 key 哈希 ——")
+        for _, k in ipairs(samples) do
+            print(("  [%s] -> %s"):format(k, QuantumUI.HashKey(k)))
+        end
+        Window:Notify({
+            Title = "已生成",
+            Content = "哈希值在控制台中查看",
+            Duration = 4,
+            Type = "Info",
+        })
+    end,
+})
+
+KeyAuthTab:AddButton({
+    Name = "Reset 已保存的密钥",
+    Callback = function()
+        Window:ResetKeyAuth()
+        keyAuthEl:Reset()
+        Window:Notify({
+            Title = "已重置",
+            Content = "本地密钥文件已删除",
+            Duration = 3,
+            Type = "Warning",
+        })
+    end,
+})
+
+-- ══════════════════════════════════════════════════════════════
+-- 8. 完成
 -- ══════════════════════════════════════════════════════════════
 task.wait(0.3)
 Window:Notify({

@@ -2,7 +2,7 @@
 
 <div align="center">
 
-![Version](https://img.shields.io/badge/Version-3.0.0-00d4ff?style=for-the-badge)
+![Version](https://img.shields.io/badge/Version-3.1.0-00d4ff?style=for-the-badge)
 ![Author](https://img.shields.io/badge/Author-log__quick-purple?style=for-the-badge)
 ![Platform](https://img.shields.io/badge/Platform-Roblox-red?style=for-the-badge)
 ![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)
@@ -33,6 +33,7 @@
 <td width="50%">
 
 ### ⚙️ Core Features
+- **KeyAuth System** - License key gating with SHA-256 hashes, HWID lock, trial mode
 - **Config System** - Separate feature & UI config directories
 - **UI Config** - Save/Load theme, transparency, window position
 - **Mobile Support** - Fully optimized for touch devices
@@ -55,6 +56,7 @@
 | **Color Picker** | Circular wheel with presets & hex input |
 | **Textbox** | Text input with placeholder |
 | **Keybind** | Customizable key binding |
+| **KeyAuth** | License key input with HWID display, status & activate button |
 | **Button** | Clickable action button |
 | **Label** | Simple text display |
 | **Paragraph** | Title + content block |
@@ -330,6 +332,31 @@ local key = Keybind:Get()
 </details>
 
 <details>
+<summary><b>🔑 KeyAuth Element</b></summary>
+
+```lua
+-- NOTE: Call QuantumUI.SetupKeyAuth() BEFORE QuantumUI.new()
+local KeyAuth = Tab:AddKeyAuth({
+    Name = "Activate License",
+    Placeholder = "XXXX-XXXX-XXXX-XXXX",
+    ShowHWID = true,               -- Show the user's HWID line
+    Callback = function(ok, key, reason)
+        print("Activated:", ok, "reason:", reason)
+    end
+})
+
+-- Methods
+KeyAuth:Activate()               -- Trigger activate with input text
+KeyAuth:IsAuthorized()           -- true/false
+KeyAuth:GetState()               -- "authorized" / "invalid_key" / "hwid_mismatch" / "unauthorized" ...
+KeyAuth:GetHWID()                -- Get current user HWID
+KeyAuth:SetKey("MY-KEY-001")     -- Pre-fill and auto-activate
+KeyAuth:Reset()                  -- Clear saved key file + input
+```
+
+</details>
+
+<details>
 <summary><b>📄 Label & Paragraph</b></summary>
 
 ```lua
@@ -413,6 +440,98 @@ Elements registered via `AddThemeElement` include:
 - The floating ball is **draggable** — drag it anywhere on screen
 - **Click** (without dragging) restores the UI to its **original position**
 - A 5px drag threshold distinguishes clicks from drags
+
+### 🔑 KeyAuth System (Licensing API)
+
+Protect your script with a developer-friendly key authorization system.
+
+#### Two integration modes
+
+**Mode A — Gate on load (recommended for paid scripts):**
+Before creating the window, call `QuantumUI.RequireKeyAuth(...)`. The Loading Screen
+will be followed by a dedicated **Key Gate popup** that blocks the user until they
+enter a valid key, start a trial, or click Cancel (which destroys the UI).
+
+```lua
+local QuantumUI = loadstring(game:HttpGet("URL"))()
+
+-- Step 1: Pre-generate SHA-256 hashes of your keys (DO NOT ship raw keys in source)
+-- In studio / command bar: print(QuantumUI.HashKey("MY-LICENSE-KEY-001"))
+
+-- Step 2: Enable KeyAuth Gate
+QuantumUI.RequireKeyAuth({
+    -- Recommended: put SHA-256 hashes (raw keys never in source)
+    Hashes = {
+        "a1b2c3d4...",   -- QuantumUI.HashKey("MY-LICENSE-KEY-001")
+        "e5f6a7b8...",   -- QuantumUI.HashKey("MY-LICENSE-KEY-002")
+    },
+
+    -- Optional: also accept plaintext keys (not recommended for prod)
+    -- Keys = {"MY-LICENSE-KEY-001"},
+
+    BindToHWID = true,       -- Key locks to first activation HWID (prevents share-in-group)
+    AllowTrial = true,       -- Offer a trial button
+    TrialSeconds = 600,      -- Trial duration (default 600s = 10 min)
+    HWIDWhitelist = {        -- Dev/Admin HWIDs bypass the one-key-one-HWID rule
+        -- QuantumUI.GetHWID() in-game to get yours
+    },
+
+    OnSuccess = function(key) print("Authorized:", key) end,
+    OnFail    = function(reason) warn("Denied:", reason) end,
+})
+
+-- Step 3: Create the window — KeyGate popup runs before the UI is shown
+local Window = QuantumUI.new({ ... })
+```
+
+**Mode B — Inline element (soft-ask pattern):**
+Use `QuantumUI.SetupKeyAuth(...)` before creating the window, then add a KeyAuth
+UI element to a Tab. The UI loads normally but features can check
+`Window:IsKeyAuthorized()` before activating.
+
+```lua
+QuantumUI.SetupKeyAuth({
+    Hashes = { ... },
+    BindToHWID = true,
+})
+
+local Window = QuantumUI.new({ ... })
+task.wait(3.5)
+
+local AuthTab = Window:AddTab({Name = "Access", Icon = "..."})
+AuthTab:AddKeyAuth({
+    Name = "License Activation",
+    Placeholder = "XXXX-XXXX-XXXX",
+    Callback = function(ok, key, reason) ... end,
+})
+
+-- In other features, gating check:
+MainTab:AddToggle({
+    Name = "Paid Feature",
+    Callback = function(state)
+        if not Window:IsKeyAuthorized() then
+            Window:Notify({Title = "Unauthorized", Content = "Activate first", Type = "Warning"})
+            return
+        end
+        -- real logic here
+    end,
+})
+```
+
+#### Helper static methods
+
+```lua
+QuantumUI.HashKey("MY-KEY")     -- sha256(key), lower-hex (use once to populate Hashes)
+QuantumUI.GetHWID()             -- current user's HWID (16-char hex, based on UserId+AccountAge+Name)
+```
+
+#### Instance-level methods
+
+```lua
+Window:IsKeyAuthorized()        -- (bool, reason) check saved key
+Window:ActivateKey("MY-KEY")    -- verify raw key programmatically
+Window:ResetKeyAuth()           -- delete saved key file (QuantumUI/KeyAuth/saved_key.json)
+```
 
 ---
 
@@ -701,6 +820,6 @@ SOFTWARE.
 
 <div align="center">
 
-**Quantum UI v3.0.0** | Sci-Fi UI Library for Roblox
+**Quantum UI v3.1.0** | Sci-Fi UI Library for Roblox
 
 </div>

@@ -1,7 +1,7 @@
 --[[
     ╔══════════════════════════════════════════════════════════════════╗
     ║                         LOG-HUB 脚本中心                          ║
-    ║                      Version 1.1.0                               ║
+    ║                      Version 1.2.0                               ║
     ║                         Created by log_quick                     ║
     ║                                                                  ║
     ║  功能：                                                          ║
@@ -28,6 +28,12 @@ local GAME_REGISTRY = {
         PlaceIds = { 286090429, 3285367695, 8216580756 },
         ScriptPath = "/FPS_QuantumUI.lua",
         Description = "FPS 辅助: ESP / 自瞄 / 扳机 / 概率瞄准 / NPC透视",
+    },
+    {
+        Name = "犯罪 (Criminality)",
+        PlaceIds = { 4588604953 },
+        ScriptPath = "/Criminality_QuantumUI.lua",
+        Description = "Criminality 辅助: 世界/玩家/战斗/视觉/白名单, 5 大 Tab, Config 自动保存",
     },
     -- 未来扩展:
     -- {
