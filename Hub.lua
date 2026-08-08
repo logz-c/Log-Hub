@@ -39,7 +39,7 @@ local GAME_REGISTRY = {
         Name = "造船寻宝 (Build a Boat for Treasure)",
         PlaceIds = { 537413528 },
         ScriptPath = "/BABFT_QuantumUI.lua",
-        Description = "BABFT 辅助: 移动 (WalkSpeed/JumpPower/InfJump/NoClip/Fly/TP) + AutoFarm (CaveStage 分段传送+GoldenChest 触发, 源自 Autofarm.lua) + Anti-AFK",
+        Description = "BABFT 辅助: 移动 (WalkSpeed/JumpPower/InfJump/NoClip/Fly/TP) + AutoFarm (源码照搬: BoatStages.NormalStages CaveStage1-10 + TheEnd.GoldenChest) + Anti-AFK",
     },
     -- 未来扩展:
     -- {
