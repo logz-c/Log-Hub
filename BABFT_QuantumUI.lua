@@ -66,6 +66,7 @@ local TweenService      = game:GetService("TweenService")
 local UserInputService  = game:GetService("UserInputService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local VirtualUser       = game:GetService("VirtualUser")
+local Lighting          = game:GetService("Lighting")
 
 -- ══════════════════════════════════════════════════════════════════
 -- 3.  CREATE MAIN WINDOW
@@ -95,9 +96,10 @@ local state = {
     NoClip           = false,
     FlyEnabled       = false,
     FlySpeed         = 50,
-    -- AutoFarm
+    -- AutoFarm (源自 Autofarm.lua)
     AutoFarm         = false,
-    FarmSpeed        = 50,
+    Teleport         = 2,    -- 段间隔 (秒)
+    TimeBetweenRuns  = 5,   -- 下一轮间隔 (秒)
     AutoClaim        = true,
     -- Anti-AFK
     AntiAFK          = false,
@@ -115,18 +117,11 @@ local function getRoot()
     return char and char:FindFirstChild("HumanoidRootPart")
 end
 
--- BABFT 河道分段坐标 (从起点到宝藏区)
-local RIVER_SEGMENTS = {
-    CFrame.new(-25.1,  63.0, 1152.7),   -- 起点
-    CFrame.new(-25.1,  70.0, 1350.0),
-    CFrame.new(-25.1,  75.0, 1550.0),
-    CFrame.new(-25.1,  81.0, 1777.4),   -- 中段
-    CFrame.new(-25.1,  75.0, 2000.0),
-    CFrame.new(-25.1,  70.0, 2300.0),
-    CFrame.new(-25.1,  68.5, 2576.7),   -- 终点附近
-    CFrame.new(-25.1,  90.0, 2900.0),
-    CFrame.new(-25.1, 114.3, 3195.2),   -- 宝藏区
-}
+-- BABFT AutoFarm 原理 (源自 Autofarm.lua):
+--   Workspace.BoatStages.NormalStages["CaveStage1".."CaveStage10"].DarknessPart.CFrame
+--   终点: Workspace.BoatStages.NormalStages.TheEnd.GoldenChest.Trigger.CFrame
+--   完成判断: Lighting.ClockTime ~= 14
+--   每段传送后, 在角色下方 6 单位创建 Anchored Part 防止下落
 
 -- 传送点 (便捷)
 local TP_LOCATIONS = {
@@ -392,29 +387,92 @@ MovementTab:AddButton({
 })
 
 -- ══════════════════════════════════════════════════════════════════
--- 6.  AUTOFARM TAB  (自动农场 - 分段传送 + 领取宝藏)
+-- 6.  AUTOFARM TAB  (源自 Autofarm.lua - CaveStage 分段传送 + GoldenChest 触发)
 -- ══════════════════════════════════════════════════════════════════
 local FarmTab = Window:AddTab({
     Name = "AutoFarm",
     Icon = "rbxassetid://6031094678",
 })
 
-FarmTab:AddSection({ Name = "River AutoFarm (河道农场)" })
+FarmTab:AddSection({ Name = "BABFT AutoFarm (河道农场)" })
 
 FarmTab:AddSlider({
-    Name      = "Teleport Speed (段间隔)",
-    Min       = 10, Max = 200, Default = 50, Increment = 5,
-    Suffix    = "ms",
-    Flag      = "BABFT_FarmSpeed",
-    Callback  = function(value) state.FarmSpeed = value end,
+    Name      = "Teleport Delay (段间隔)",
+    Min       = 0.5, Max = 10, Default = 2, Increment = 0.5,
+    Suffix    = "s",
+    Flag      = "BABFT_Teleport",
+    Callback  = function(value) state.Teleport = value end,
 })
 
-FarmTab:AddToggle({
-    Name      = "Auto Claim Gold (自动领金)",
-    Default   = true,
-    Flag      = "BABFT_AutoClaim",
-    Callback  = function(s) state.AutoClaim = s end,
+FarmTab:AddSlider({
+    Name      = "Time Between Runs (轮间隔)",
+    Min       = 1, Max = 30, Default = 5, Increment = 1,
+    Suffix    = "s",
+    Flag      = "BABFT_TimeBetweenRuns",
+    Callback  = function(value) state.TimeBetweenRuns = value end,
 })
+
+-- 单轮农场流程 (基于 Autofarm.lua 真实逻辑)
+local function runFarmOnce(currentRun)
+    local Character = LocalPlayer.Character
+    if not Character then return false end
+    local HRP = Character:FindFirstChild("HumanoidRootPart")
+    if not HRP then return false end
+
+    local NormalStages = workspace:FindFirstChild("BoatStages")
+        and workspace.BoatStages:FindFirstChild("NormalStages")
+    if not NormalStages then
+        warn("[BABFT] 未找到 BoatStages.NormalStages, 当前游戏可能未加载完毕")
+        return false
+    end
+
+    -- 1) 依次传送到 CaveStage1 .. CaveStage10 的 DarknessPart
+    for i = 1, 10 do
+        if not state.AutoFarm then return false end
+        local Stage = NormalStages:FindFirstChild("CaveStage" .. i)
+        local DarknessPart = Stage and Stage:FindFirstChild("DarknessPart")
+        if DarknessPart then
+            print("[BABFT] 传送到 Stage " .. i)
+            HRP.CFrame = DarknessPart.CFrame
+            -- 在角色下方 6 单位创建临时 Anchored Part 防止下落
+            local tempPart = Instance.new("Part")
+            tempPart.Anchored = true
+            tempPart.Size = Vector3.new(8, 1, 8)
+            tempPart.Position = HRP.Position - Vector3.new(0, 6, 0)
+            tempPart.Parent = Character
+            task.wait(state.Teleport)
+            tempPart:Destroy()
+        end
+    end
+
+    -- 2) 传送到 TheEnd.GoldenChest.Trigger 触发宝藏奖励
+    local TheEnd = NormalStages:FindFirstChild("TheEnd")
+    local GoldenChest = TheEnd and TheEnd:FindFirstChild("GoldenChest")
+    local Trigger = GoldenChest and GoldenChest:FindFirstChild("Trigger")
+    if Trigger then
+        print("[BABFT] 传送到终点 GoldenChest.Trigger")
+        repeat
+            if not state.AutoFarm then return false end
+            HRP.CFrame = Trigger.CFrame
+            task.wait(0.2)
+        until Lighting.ClockTime ~= 14
+    end
+
+    -- 3) 等待角色重生
+    local respawned = false
+    local conn
+    conn = LocalPlayer.CharacterAdded:Connect(function()
+        respawned = true
+        if conn then conn:Disconnect() end
+    end)
+    repeat
+        task.wait(0.2)
+        if not state.AutoFarm then return false end
+    until respawned
+    task.wait(state.TimeBetweenRuns)
+    print("[BABFT] Run " .. currentRun .. " 完成")
+    return true
+end
 
 FarmTab:AddToggle({
     Name      = "Start AutoFarm",
@@ -424,34 +482,19 @@ FarmTab:AddToggle({
         state.AutoFarm = s
         if s then
             task.spawn(function()
+                local run = 1
                 while state.AutoFarm do
-                    local char = getChar()
-                    if not char then task.wait(0.5); continue end
-                    -- 分段传送
-                    for _, seg in ipairs(RIVER_SEGMENTS) do
-                        if not state.AutoFarm then break end
-                        char:PivotTo(seg)
-                        task.wait(state.FarmSpeed / 1000)
+                    print("[BABFT] 初始化 AutoFarm: Run " .. run)
+                    local ok = pcall(runFarmOnce, run)
+                    if not ok then
+                        warn("[BABFT] Run " .. run .. " 异常, 等待重试")
+                        task.wait(1)
                     end
-                    -- 领取宝藏
-                    if state.AutoClaim then
-                        pcall(function()
-                            local claimRE = ReplicatedStorage:FindFirstChild("ClaimRiverResultsGold", true)
-                                or ReplicatedStorage:WaitForChild("ClaimRiverResultsGold", 3)
-                            if claimRE and claimRE:IsA("RemoteEvent") then
-                                claimRE:FireServer()
-                            end
-                        end)
-                    end
-                    -- 回到起点
-                    if state.AutoFarm then
-                        char:PivotTo(RIVER_SEGMENTS[1])
-                    end
-                    task.wait(1)
+                    run = run + 1
                 end
             end)
             Window:Notify({
-                Title = "AutoFarm", Content = "自动农场已启动",
+                Title = "AutoFarm", Content = "自动农场已启动\n基于 Autofarm.lua 真实逻辑",
                 Duration = 3, Type = "Success",
             })
         else
@@ -469,7 +512,7 @@ FarmTab:AddButton({
     Name      = "传送到起点",
     Callback  = function()
         local char = getChar()
-        if char then char:PivotTo(RIVER_SEGMENTS[1]) end
+        if char then char:PivotTo(TP_LOCATIONS[1].Pos) end
     end,
 })
 
@@ -477,22 +520,45 @@ FarmTab:AddButton({
     Name      = "传送到宝藏区",
     Callback  = function()
         local char = getChar()
-        if char then char:PivotTo(RIVER_SEGMENTS[#RIVER_SEGMENTS]) end
+        if char then char:PivotTo(TP_LOCATIONS[4].Pos) end
     end,
 })
 
 FarmTab:AddButton({
-    Name      = "手动领取宝藏",
+    Name      = "传送到 TheEnd (终点)",
     Callback  = function()
+        local char = getChar()
+        local HRP = char and char:FindFirstChild("HumanoidRootPart")
+        if not HRP then return end
         local ok = pcall(function()
-            local claimRE = ReplicatedStorage:FindFirstChild("ClaimRiverResultsGold", true)
-            if claimRE and claimRE:IsA("RemoteEvent") then
-                claimRE:FireServer()
-            end
+            local Trigger = workspace.BoatStages.NormalStages.TheEnd.GoldenChest.Trigger
+            HRP.CFrame = Trigger.CFrame
         end)
         Window:Notify({
-            Title = "领取", Content = ok and "已发送领取请求" or "领取失败",
+            Title = "传送", Content = ok and "已传送到 TheEnd" or "未找到 TheEnd",
             Duration = 2, Type = ok and "Success" or "Error",
+        })
+    end,
+})
+
+FarmTab:AddButton({
+    Name      = "打印 CaveStage 坐标",
+    Callback  = function()
+        print("[BABFT] —— CaveStage DarknessPart 坐标 ——")
+        for i = 1, 10 do
+            local Stage = workspace.BoatStages.NormalStages:FindFirstChild("CaveStage" .. i)
+            local dp = Stage and Stage:FindFirstChild("DarknessPart")
+            if dp then
+                local p = dp.Position
+                print(string.format("  CaveStage%d: (%.1f, %.1f, %.1f)", i, p.X, p.Y, p.Z))
+            end
+        end
+        local trigger = workspace.BoatStages.NormalStages.TheEnd.GoldenChest.Trigger
+        local tp = trigger.Position
+        print(string.format("  TheEnd.Trigger: (%.1f, %.1f, %.1f)", tp.X, tp.Y, tp.Z))
+        Window:Notify({
+            Title = "调试", Content = "坐标已打印到控制台",
+            Duration = 2, Type = "Info",
         })
     end,
 })
