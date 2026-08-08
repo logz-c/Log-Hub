@@ -1,20 +1,21 @@
 --[[
     ╔══════════════════════════════════════════════════════════════════╗
     ║                        QUANTUM UI LIBRARY                        ║
-    ║                   Version 3.1.0 - KeyAuth API                   ║
+    ║                Version 3.2.0 - DangerConfirm API                ║
     ║                         Created by log_quick                     ║
     ║                                                                  ║
-    ║  Changelog v3.1.0:                                              ║
-    ║  • NEW: QuantumUI.SetupKeyAuth() global API                     ║
-    ║  • NEW: Window:AddKeyAuth() element with input + status         ║
-    ║  • NEW: Window:RequireKeyAuth() loading-screen gating           ║
-    ║  • Supports plaintext keys + SHA-256 hashes + HWID binds        ║
+    ║  Changelog v3.2.0:                                              ║
+    ║  • FIX: Destroy 后无法再次注入的 BUG (清理 _G.QuantumUI_Window,║
+    ║       CoreGui 内遗留 QuantumUI_* 实例、RainbowHandler.Objects)  ║
+    ║  • NEW: Window:DangerConfirm() 危险确认模态弹窗 API             ║
+    ║  • NEW: Tab:AddDangerToggle() 危险开关(带二次确认)              ║
+    ║  • NEW: 销毁 UI (Settings→Destroy) 先弹出 DangerConfirm         ║
     ╚══════════════════════════════════════════════════════════════════╝
 --]]
 
 local QuantumUI = {}
 QuantumUI.__index = QuantumUI
-QuantumUI.Version = "3.1.0"
+QuantumUI.Version = "3.2.0"
 QuantumUI.Author = "log_quick"
 QuantumUI.ThemeColor = Color3.fromRGB(0, 200, 255)
 QuantumUI.Transparency = 0.3
@@ -1272,11 +1273,24 @@ end
 
 function QuantumUI:Destroy()
     RainbowHandler.Stop()
+    -- 清空 RainbowHandler 对象池 (防止重注入时残留的死亡引用影响渲染)
+    table.clear(RainbowHandler.Objects)
     if self.ScreenGui then self.ScreenGui:Destroy() end
     -- 清理 _G 全局引用
     if _G.QuantumUI_Instance == self then
         _G.QuantumUI_Instance = nil
     end
+    if _G.QuantumUI_Window == self then
+        _G.QuantumUI_Window = nil
+    end
+    -- 兜底：CoreGui 中任何 QuantumUI_ 前缀的孤儿实例都清理掉
+    pcall(function()
+        for _, child in ipairs(CoreGui:GetChildren()) do
+            if child:IsA("ScreenGui") and child.Name:sub(1, 9) == "QuantumUI_" then
+                pcall(function() child:Destroy() end)
+            end
+        end
+    end)
 end
 
 function QuantumUI:UpdateContentSize(parent, delayAfter)
@@ -1484,6 +1498,7 @@ function QuantumUI:AddTab(options)
     function tab:AddSection(opts) return window:CreateSection(tabPage, opts) end
     function tab:AddButton(opts) return window:CreateButton(tabPage, opts) end
     function tab:AddToggle(opts) return window:CreateToggle(tabPage, opts) end
+    function tab:AddDangerToggle(opts) return window:CreateDangerToggle(tabPage, opts) end
     function tab:AddSlider(opts) return window:CreateSlider(tabPage, opts) end
     function tab:AddDropdown(opts) return window:CreateDropdown(tabPage, opts) end
     function tab:AddTextbox(opts) return window:CreateTextbox(tabPage, opts) end
@@ -1701,6 +1716,175 @@ function QuantumUI:CreateToggle(parent, options)
     update(toggled, true, true)
     self:UpdateContentSize(parent)
     
+    if flag then self.Flags[flag] = obj; self.Elements[flag] = obj end
+    return obj
+end
+
+-- DangerToggle: 当用户尝试把开关置为 true 时先弹 DangerConfirm 二次确认 (关闭时直接)
+-- options = { Name, Default, Flag, ConfirmTitle?, ConfirmContent?, ConfirmText?, CancelText?, Callback }
+function QuantumUI:CreateDangerToggle(parent, options)
+    options = options or {}
+    local flag = options.Flag
+    local toggled = options.Default or false
+    local win = self
+
+    local frame = Utility.Create("Frame", {
+        Parent = parent,
+        BackgroundColor3 = Color3.fromRGB(45, 25, 30),
+        BackgroundTransparency = 0.2,
+        BorderSizePixel = 0,
+        Size = UDim2.new(1, 0, 0, 45),
+        ZIndex = 7
+    }, {Utility.Create("UICorner", {CornerRadius = UDim.new(0, 8)})})
+
+    -- 危险标识
+    Utility.Create("TextLabel", {
+        Parent = frame,
+        BackgroundTransparency = 1,
+        Size = UDim2.new(0, 20, 0, 20),
+        Position = UDim2.new(0, 12, 0.5, 0),
+        AnchorPoint = Vector2.new(0, 0.5),
+        Font = Enum.Font.GothamBold,
+        Text = "⚠",
+        TextColor3 = Color3.fromRGB(255, 120, 120),
+        TextSize = 18,
+        ZIndex = 8,
+    })
+
+    Utility.Create("TextLabel", {
+        Parent = frame,
+        BackgroundTransparency = 1,
+        Size = UDim2.new(1, -100, 1, 0),
+        Position = UDim2.new(0, 38, 0, 0),
+        Font = Enum.Font.GothamSemibold,
+        Text = options.Name or "Danger Toggle",
+        TextColor3 = Color3.fromRGB(255, 220, 220),
+        TextSize = 14,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        ZIndex = 8
+    })
+
+    local toggleBg = Utility.Create("Frame", {
+        Parent = frame,
+        BackgroundColor3 = Color3.fromRGB(80, 40, 45),
+        BorderSizePixel = 0,
+        Size = UDim2.new(0, 50, 0, 26),
+        Position = UDim2.new(1, -60, 0.5, 0),
+        AnchorPoint = Vector2.new(0, 0.5),
+        ZIndex = 8
+    }, {Utility.Create("UICorner", {CornerRadius = UDim.new(1, 0)})})
+    self:AddThemeElement(toggleBg, "BackgroundColor3")
+
+    local toggleIndicator = Utility.Create("Frame", {
+        Parent = toggleBg,
+        BackgroundColor3 = Color3.fromRGB(255, 255, 255),
+        BorderSizePixel = 0,
+        Size = UDim2.new(0, 20, 0, 20),
+        Position = UDim2.new(0, 3, 0.5, 0),
+        AnchorPoint = Vector2.new(0, 0.5),
+        ZIndex = 9
+    }, {Utility.Create("UICorner", {CornerRadius = UDim.new(1, 0)})})
+
+    local DANGER_COLOR = Color3.fromRGB(255, 80, 90)
+
+    local function update(state, skip, noAnimate)
+        toggled = state
+        local targetPos = toggled and UDim2.new(1, -23, 0.5, 0) or UDim2.new(0, 3, 0.5, 0)
+        local targetColor = toggled and DANGER_COLOR or Color3.fromRGB(80, 40, 45)
+
+        if toggleBg and toggleBg.Parent then toggleBg.BackgroundColor3 = targetColor end
+        if toggleIndicator and toggleIndicator.Parent then toggleIndicator.Position = targetPos end
+
+        if not noAnimate then
+            if toggleIndicator and toggleIndicator.Parent then
+                Utility.Tween(toggleIndicator, {Size = UDim2.new(0, 26, 0, 26)}, 0.08)
+                task.delay(0.08, function()
+                    if toggleIndicator and toggleIndicator.Parent then
+                        Utility.Tween(toggleIndicator, {Size = UDim2.new(0, 20, 0, 20)}, 0.12)
+                    end
+                end)
+            end
+            task.defer(function()
+                if toggleBg and toggleBg.Parent then
+                    Utility.Tween(toggleBg, {BackgroundColor3 = targetColor}, 0.2)
+                end
+                if toggleIndicator and toggleIndicator.Parent then
+                    Utility.Tween(toggleIndicator, {Position = targetPos}, 0.2)
+                end
+            end)
+        end
+
+        if flag then self.ConfigData[flag] = toggled end
+        if not skip and options.Callback then options.Callback(toggled) end
+    end
+
+    local btn = Utility.Create("TextButton", {
+        Parent = frame,
+        BackgroundTransparency = 1,
+        Size = UDim2.new(1, 0, 1, 0),
+        Text = "",
+        ZIndex = 10
+    })
+
+    btn.MouseButton1Click:Connect(function()
+        Utility.PlaySound(Sounds.Toggle, 0.3)
+        if toggled then
+            -- 关: 直接执行 (从危险状态退出)
+            update(false)
+        else
+            -- 开: 先弹二次确认
+            win:DangerConfirm({
+                Title = options.ConfirmTitle or ("启用: " .. tostring(options.Name or "Danger Toggle")),
+                Content = options.ConfirmContent or "该功能被开发者标记为危险操作，启用后可能导致账号被检测或其他不可逆后果！\n\n确定要继续吗？",
+                ConfirmText = options.ConfirmText or "我已知风险，确定启用",
+                CancelText  = options.CancelText  or "取消",
+                OnConfirm = function()
+                    update(true)
+                end,
+                OnCancel = function()
+                    -- 保持状态不变, 播放失败音效
+                    Utility.PlaySound(Sounds.Error, 0.2)
+                end,
+            })
+        end
+    end)
+
+    local obj = {
+        Frame = frame,
+        Value = toggled,
+        ToggleBg = toggleBg,
+        ToggleIndicator = toggleIndicator,
+        Set = function(selfObj, s, skipConfirm)
+            local newState = s and true or false
+            if newState and not skipConfirm and not toggled then
+                -- 从外部置为 true 时也走确认流程
+                win:DangerConfirm({
+                    Title = options.ConfirmTitle or ("启用: " .. tostring(options.Name or "Danger Toggle")),
+                    Content = options.ConfirmContent or "该功能被开发者标记为危险操作，启用后可能导致账号被检测或其他不可逆后果！\n\n确定要继续吗？",
+                    ConfirmText = options.ConfirmText or "我已知风险，确定启用",
+                    CancelText  = options.CancelText  or "取消",
+                    OnConfirm = function()
+                        toggled = true
+                        Utility.PlaySound(Sounds.Toggle, 0.3)
+                        update(toggled, true, false)
+                        selfObj.Value = toggled
+                        if options.Callback then options.Callback(toggled) end
+                    end,
+                })
+            else
+                toggled = newState
+                Utility.PlaySound(Sounds.Toggle, 0.3)
+                update(toggled, true, false)
+                selfObj.Value = toggled
+                if options.Callback then options.Callback(toggled) end
+            end
+        end,
+        Get = function() return toggled end
+    }
+
+    update(toggled, true, true)
+    self:UpdateContentSize(parent)
+
     if flag then self.Flags[flag] = obj; self.Elements[flag] = obj end
     return obj
 end
@@ -3614,10 +3798,20 @@ function QuantumUI:CreateSettingsTab()
     settingsTab:AddButton({
         Name = "💀 Destroy UI",
         Callback = function()
-            Utility.PlaySound(Sounds.Close, 0.5)
-            self:Notify({Title = "Goodbye!", Content = "Destroying UI...", Duration = 1, Type = "Info"})
-            task.wait(1)
-            self:Destroy()
+            self:DangerConfirm({
+                Title = "销毁 UI 确认",
+                Content = "你确定要销毁 Quantum UI 吗？\n\n销毁后需要重新注入 loadstring 才能恢复，\n并且所有未保存的配置会丢失！",
+                ConfirmText = "确定销毁",
+                CancelText  = "取消",
+                OnConfirm = function()
+                    Utility.PlaySound(Sounds.Close, 0.5)
+                    pcall(function()
+                        self:Notify({Title = "Goodbye!", Content = "Destroying UI...", Duration = 1, Type = "Info"})
+                    end)
+                    task.wait(1)
+                    self:Destroy()
+                end,
+            })
         end
     })
     
@@ -3752,6 +3946,215 @@ function QuantumUI:Notify(options)
         Utility.Tween(notif, {Size = UDim2.new(1, 0, 0, 0), BackgroundTransparency = 1}, 0.3)
         task.wait(0.3)
         if notif then notif:Destroy() end
+    end)
+end
+
+-- ═══════════════════════════════════════════════════════════════════
+--  DANGERCONFIRM — 危险操作二次确认模态弹窗
+--  使用: Window:DangerConfirm({
+--      Title = "确认操作",
+--      Content = "确定要...？此操作无法撤销！",
+--      ConfirmText = "确定",          -- 可选，默认"确定"
+--      CancelText  = "取消",          -- 可选，默认"取消"
+--      OnConfirm   = function() ... end,
+--      OnCancel    = function() ... end, -- 可选
+--  })
+-- ═══════════════════════════════════════════════════════════════════
+function QuantumUI:DangerConfirm(options)
+    options = options or {}
+    local title       = options.Title       or "危险操作"
+    local content     = options.Content     or "确定要继续吗？"
+    local confirmText = options.ConfirmText or "确定"
+    local cancelText  = options.CancelText  or "取消"
+    local onConfirm   = options.OnConfirm
+    local onCancel    = options.OnCancel
+
+    if not self.ScreenGui or not self.ScreenGui.Parent then
+        -- UI 已销毁的情况下仍允许通过 (方便销毁流程自举)
+        if onConfirm then task.spawn(onConfirm) end
+        return
+    end
+
+    Utility.PlaySound(Sounds.Error, 0.3)
+
+    local DANGER_COLOR = Color3.fromRGB(255, 70, 80)
+
+    -- 屏幕遮罩
+    local overlay = Utility.Create("Frame", {
+        Parent = self.ScreenGui,
+        BackgroundColor3 = Color3.fromRGB(0, 0, 0),
+        BackgroundTransparency = 0.6,
+        Size = UDim2.new(1, 0, 1, 0),
+        Position = UDim2.new(0, 0, 0, 0),
+        ZIndex = 9000,
+        Active = true,
+    })
+    overlay.BackgroundTransparency = 1
+    Utility.Tween(overlay, {BackgroundTransparency = 0.6}, 0.25)
+
+    -- 弹窗容器
+    local modal = Utility.Create("Frame", {
+        Parent = overlay,
+        BackgroundColor3 = Color3.fromRGB(15, 15, 28),
+        BackgroundTransparency = 0.05,
+        BorderSizePixel = 0,
+        Size = UDim2.new(0, 420, 0, 0),
+        Position = UDim2.new(0.5, 0, 0.4, 0),
+        AnchorPoint = Vector2.new(0.5, 0.5),
+        ZIndex = 9001,
+    }, {
+        Utility.Create("UICorner", {CornerRadius = UDim.new(0, 14)}),
+        Utility.Create("UIStroke", {Color = DANGER_COLOR, Thickness = 2, Transparency = 0.25}),
+    })
+
+    -- 顶部红色警示条
+    Utility.Create("Frame", {
+        Parent = modal,
+        BackgroundColor3 = DANGER_COLOR,
+        BorderSizePixel = 0,
+        Size = UDim2.new(1, 0, 0, 4),
+        Position = UDim2.new(0, 0, 0, 0),
+        ZIndex = 9002,
+    }, {Utility.Create("UICorner", {CornerRadius = UDim.new(0, 2)})})
+
+    -- ⚠ 图标
+    Utility.Create("TextLabel", {
+        Parent = modal,
+        BackgroundTransparency = 1,
+        Size = UDim2.new(0, 40, 0, 40),
+        Position = UDim2.new(0, 20, 0, 22),
+        Font = Enum.Font.GothamBlack,
+        Text = "⚠",
+        TextColor3 = DANGER_COLOR,
+        TextSize = 34,
+        ZIndex = 9002,
+    })
+
+    -- 标题
+    Utility.Create("TextLabel", {
+        Parent = modal,
+        BackgroundTransparency = 1,
+        Size = UDim2.new(1, -80, 0, 30),
+        Position = UDim2.new(0, 68, 0, 20),
+        Font = Enum.Font.GothamBold,
+        Text = title,
+        TextColor3 = DANGER_COLOR,
+        TextSize = 18,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        ZIndex = 9002,
+    })
+
+    -- 正文
+    local contentLabel = Utility.Create("TextLabel", {
+        Parent = modal,
+        BackgroundTransparency = 1,
+        Size = UDim2.new(1, -40, 0, 60),
+        Position = UDim2.new(0, 20, 0, 72),
+        Font = Enum.Font.Gotham,
+        Text = content,
+        TextColor3 = Color3.fromRGB(220, 220, 220),
+        TextSize = 14,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        TextYAlignment = Enum.TextYAlignment.Top,
+        TextWrapped = true,
+        ZIndex = 9002,
+    })
+
+    -- 测量正文高度
+    local textSize = TextService:GetTextSize(content, 14, Enum.Font.Gotham, Vector2.new(420 - 40, math.huge))
+    local contentHeight = math.max(60, textSize.Y + 10)
+    contentLabel.Size = UDim2.new(1, -40, 0, contentHeight)
+
+    local modalHeight = 72 + contentHeight + 85   -- 72 = 标题到正文间距; 85 = 按钮区+padding
+
+    -- 取消按钮
+    local cancelBtn = Utility.Create("TextButton", {
+        Parent = modal,
+        BackgroundColor3 = Color3.fromRGB(40, 40, 60),
+        BackgroundTransparency = 0.15,
+        BorderSizePixel = 0,
+        Size = UDim2.new(0, 180, 0, 40),
+        Position = UDim2.new(0, 20, 0, modalHeight - 60),
+        Text = "",
+        AutoButtonColor = false,
+        ZIndex = 9002,
+    }, {Utility.Create("UICorner", {CornerRadius = UDim.new(0, 10)})})
+
+    Utility.Create("TextLabel", {
+        Parent = cancelBtn,
+        BackgroundTransparency = 1,
+        Size = UDim2.new(1, 0, 1, 0),
+        Font = Enum.Font.GothamSemibold,
+        Text = cancelText,
+        TextColor3 = Color3.fromRGB(220, 220, 220),
+        TextSize = 14,
+        ZIndex = 9003,
+    })
+
+    -- 确定按钮 (红色危险)
+    local confirmBtn = Utility.Create("TextButton", {
+        Parent = modal,
+        BackgroundColor3 = DANGER_COLOR,
+        BackgroundTransparency = 0.05,
+        BorderSizePixel = 0,
+        Size = UDim2.new(0, 180, 0, 40),
+        Position = UDim2.new(1, -200, 0, modalHeight - 60),
+        Text = "",
+        AutoButtonColor = false,
+        ZIndex = 9002,
+    }, {
+        Utility.Create("UICorner", {CornerRadius = UDim.new(0, 10)}),
+        Utility.Create("UIStroke", {Color = Color3.fromRGB(255, 255, 255), Thickness = 1, Transparency = 0.7}),
+    })
+
+    Utility.Create("TextLabel", {
+        Parent = confirmBtn,
+        BackgroundTransparency = 1,
+        Size = UDim2.new(1, 0, 1, 0),
+        Font = Enum.Font.GothamBold,
+        Text = confirmText,
+        TextColor3 = Color3.fromRGB(255, 255, 255),
+        TextSize = 14,
+        ZIndex = 9003,
+    })
+
+    modal.Size = UDim2.new(0, 420, 0, 0)
+    Utility.Tween(modal, {Size = UDim2.new(0, 420, 0, modalHeight)}, 0.35, Enum.EasingStyle.Back)
+
+    local resolved = false
+    local function closeModal()
+        if resolved then return end
+        resolved = true
+        Utility.Tween(modal, {Size = UDim2.new(0, 420, 0, 0), BackgroundTransparency = 1}, 0.25)
+        Utility.Tween(overlay, {BackgroundTransparency = 1}, 0.25)
+        task.wait(0.28)
+        pcall(function() overlay:Destroy() end)
+    end
+
+    cancelBtn.MouseEnter:Connect(function()
+        Utility.Tween(cancelBtn, {BackgroundColor3 = Color3.fromRGB(60, 60, 85), BackgroundTransparency = 0}, 0.15)
+        Utility.PlaySound(Sounds.Hover, 0.25)
+    end)
+    cancelBtn.MouseLeave:Connect(function()
+        Utility.Tween(cancelBtn, {BackgroundColor3 = Color3.fromRGB(40, 40, 60), BackgroundTransparency = 0.15}, 0.15)
+    end)
+    cancelBtn.MouseButton1Click:Connect(function()
+        Utility.PlaySound(Sounds.Click, 0.3)
+        closeModal()
+        if onCancel then task.spawn(onCancel) end
+    end)
+
+    confirmBtn.MouseEnter:Connect(function()
+        Utility.Tween(confirmBtn, {BackgroundColor3 = Color3.fromRGB(255, 90, 100)}, 0.15)
+        Utility.PlaySound(Sounds.Hover, 0.25)
+    end)
+    confirmBtn.MouseLeave:Connect(function()
+        Utility.Tween(confirmBtn, {BackgroundColor3 = DANGER_COLOR}, 0.15)
+    end)
+    confirmBtn.MouseButton1Click:Connect(function()
+        Utility.PlaySound(Sounds.Click, 0.35)
+        closeModal()
+        if onConfirm then task.spawn(onConfirm) end
     end)
 end
 
