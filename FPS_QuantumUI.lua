@@ -35,7 +35,7 @@ end
 -- 1. LOAD LIBRARY
 -- ══════════════════════════════════════════════════════════════════
 local success, QuantumUI = pcall(function()
-    return loadstring(game:HttpGet("https://raw.githubusercontent.com/logz-c/logz-ui-lib/refs/heads/main/Source.lua"))()
+    return loadstring(game:HttpGet("https://raw.githubusercontent.com/logz-c/Log-Hub/main/SciFi-UI-Library/source.lua"))()
 end)
 
 if not success then

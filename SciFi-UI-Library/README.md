@@ -67,7 +67,7 @@
 ### Method 1: Load from GitHub (Recommended)
 
 ```lua
-local QuantumUI = loadstring(game:HttpGet("https://raw.githubusercontent.com/logz-c/logz-ui-lib/refs/heads/main/Source.lua"))()
+local QuantumUI = loadstring(game:HttpGet("https://raw.githubusercontent.com/logz-c/Log-Hub/main/SciFi-UI-Library/source.lua"))()
 ```
 
 ### Method 2: Local File
@@ -86,7 +86,7 @@ local QuantumUI = loadstring(readfile("Source.lua"))()
 
 ```lua
 -- Load the library
-local QuantumUI = loadstring(game:HttpGet("https://raw.githubusercontent.com/logz-c/logz-ui-lib/refs/heads/main/Source.lua"))()
+local QuantumUI = loadstring(game:HttpGet("https://raw.githubusercontent.com/logz-c/Log-Hub/main/SciFi-UI-Library/source.lua"))()
 
 -- Create a window
 local Window = QuantumUI.new({
@@ -421,7 +421,7 @@ Elements registered via `AddThemeElement` include:
 ### Complete Script Example
 
 ```lua
-local QuantumUI = loadstring(game:HttpGet("https://raw.githubusercontent.com/logz-c/logz-ui-lib/refs/heads/main/Source.lua"))()
+local QuantumUI = loadstring(game:HttpGet("https://raw.githubusercontent.com/logz-c/Log-Hub/main/SciFi-UI-Library/source.lua"))()
 
 local Window = QuantumUI.new({
     Title = "Quantum Hub",
