@@ -1,7 +1,7 @@
 --[[
     ╔══════════════════════════════════════════════════════════════════╗
     ║                         LOG-HUB 脚本中心                          ║
-    ║                      Version 1.4.0                               ║
+    ║                      Version 1.5.0                               ║
     ║                         Created by log_quick                     ║
     ║                                                                  ║
     ║  功能：                                                          ║
@@ -40,6 +40,12 @@ local GAME_REGISTRY = {
         PlaceIds = { 537413528 },
         ScriptPath = "/BABFT_QuantumUI.lua",
         Description = "BABFT 辅助: 移动 (WalkSpeed/JumpPower/InfJump/NoClip/Fly/TP) + AutoFarm (源码照搬: BoatStages.NormalStages CaveStage1-10 + TheEnd.GoldenChest) + Anti-AFK",
+    },
+    {
+        Name = "Murder Mystery 2 (MM2)",
+        PlaceIds = { 142823291 },
+        ScriptPath = "/MM2_QuantumUI.lua",
+        Description = "MM2 辅助: Chams ESP / 角色检测 (凶手红/警长蓝/无辜绿) / Gun ESP / Xray / Grab Gun / 玩家传送 / 自定义热键",
     },
     -- 未来扩展:
     -- {
@@ -192,7 +198,7 @@ local function loadGenericScript()
 
     local Window = QuantumUI.new({
         Title    = "通用模式 - " .. GameName,
-        Subtitle = "PlaceId: " .. tostring(PlaceId) .. "  |  Log-Hub v1.4.0",
+        Subtitle = "PlaceId: " .. tostring(PlaceId) .. "  |  Log-Hub v1.5.0",
         ThemeColor = Color3.fromRGB(0, 200, 255),
         Transparency = 0.3,
         Size     = UDim2.new(0, 560, 0, 440),
