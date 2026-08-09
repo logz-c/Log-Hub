@@ -33,18 +33,14 @@ end
 -- 1. LOAD LIBRARY
 -- ══════════════════════════════════════════════════════════════════
 local success, QuantumUI = pcall(function()
-    return loadstring(game:HttpGet("https://raw.githubusercontent.com/logz-c/logz-ui-lib/refs/heads/main/Source.lua"))()
+    return loadstring(game:HttpGet("https://raw.githubusercontent.com/logz-c/Log-Hub/main/SciFi-UI-Library/source.lua"))()
 end)
 
 if not success then
     warn("[MM2 Hub] 加载 Quantum UI 库失败:", QuantumUI)
     warn("[MM2 Hub] 尝试使用本地源码...")
     local localSuccess, localQuantumUI = pcall(function()
-        local localPath = "../SciFi-UI-Library/source.lua"
-        if isfile and isfile(localPath) then
-            return loadstring(readfile(localPath))()
-        end
-        localPath = "SciFi-UI-Library/source.lua"
+        local localPath = "SciFi-UI-Library/source.lua"
         if isfile and isfile(localPath) then
             return loadstring(readfile(localPath))()
         end
