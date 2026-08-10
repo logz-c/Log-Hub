@@ -1879,7 +1879,7 @@ Window = QuantumUI.new({
 
 _G.QuantumUI_Window = Window
 
-task.wait(0.3)
+task.wait(3.5)
 
 -- ========== TAB 1: ESP ==========
 local ESPTab = Window:AddTab({ Name = "ESP", Icon = "rbxassetid://6034509993" })
