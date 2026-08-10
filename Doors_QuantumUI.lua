@@ -1,6 +1,6 @@
 --[[
-    Doors 辅助脚本 v1.0 (Quantum UI 版)
-    功能：ESP、Entity 拦截、交互、移动、快捷键、杂项
+    Doors 辅助脚本 v2.0 (QuantumUI)
+    功能：ESP、Entity 拦截、交互、移动、快捷键、杂项、矿井车路径、AutoWardrobe、FakeRevive 等
     PlaceIds:
         6839808510 - Doors (Hotel)
         7894711641 - Doors (Floor 2)
@@ -66,9 +66,130 @@ local Workspace = workspace
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local TweenService = game:GetService("TweenService")
 local VirtualInputManager = game:GetService("VirtualInputManager")
+local Lighting = game:GetService("Lighting")
 
 -- ══════════════════════════════════════════════════════════════════
--- 3. 预设颜色 & SETTINGS
+-- 3. DATA STRUCTURES — 新源码框架数据结构
+-- ══════════════════════════════════════════════════════════════════
+
+local EntityTable = {
+    ["Names"] = {"BackdoorRush", "BackdoorLookman", "RushMoving", "AmbushMoving", "Eyes", "JeffTheKiller", "A60", "A120"},
+    ["SideNames"] = {"FigureRig", "GiggleCeiling", "GrumbleRig", "Snare"},
+    ["ShortNames"] = {
+        ["BackdoorRush"] = "Blitz",
+        ["JeffTheKiller"] = "Jeff The Killer"
+    },
+    ["NotifyMessage"] = {
+        ["GloombatSwarm"] = "Gloombats in next room!"
+    },
+    ["Avoid"] = {
+        "RushMoving",
+        "AmbushMoving"
+    },
+    ["NotifyReason"] = {
+        ["A60"] = { ["Image"] = "12350986086" },
+        ["A120"] = { ["Image"] = "12351008553" },
+        ["BackdoorRush"] = { ["Image"] = "11102256553" },
+        ["RushMoving"] = { ["Image"] = "11102256553" },
+        ["AmbushMoving"] = { ["Image"] = "10938726652" },
+        ["Eyes"] = { ["Image"] = "10865377903", ["Spawned"] = true },
+        ["BackdoorLookman"] = { ["Image"] = "16764872677", ["Spawned"] = true },
+        ["JeffTheKiller"] = { ["Image"] = "98993343", ["Spawned"] = true },
+        ["GloombatSwarm"] = { ["Image"] = "108578770251369", ["Spawned"] = true }
+    },
+    ["NoCheck"] = {
+        "Eyes",
+        "BackdoorLookman",
+        "JeffTheKiller"
+    },
+    ["InfCrucifixVelocity"] = {
+        ["RushMoving"] = { threshold = 52, minDistance = 55 },
+        ["RushNew"] = { threshold = 52, minDistance = 55 },
+        ["AmbushMoving"] = { threshold = 70, minDistance = 80 }
+    },
+    ["AutoWardrobe"] = {
+        ["Entities"] = {
+            "RushMoving",
+            "AmbushMoving",
+            "BackdoorRush",
+            "A60",
+            "A120",
+        },
+        ["Distance"] = {
+            ["RushMoving"] = 135,
+            ["BackdoorRush"] = 135,
+            ["AmbushMoving"] = 155,
+            ["A60"] = 200,
+            ["A120"] = 200,
+        },
+        ["DistanceLoader"] = {
+            ["RushMoving"] = 175,
+            ["BackdoorRush"] = 175,
+            ["AmbushMoving"] = 200,
+            ["A60"] = 200,
+            ["A120"] = 200,
+        }
+    }
+}
+
+local HidingPlaceName = {
+    ["Hotel"] = "Closet",
+    ["Backdoor"] = "Closet",
+    ["Fools"] = "Closet",
+    ["Rooms"] = "Locker",
+    ["Mines"] = "Locker"
+}
+
+local CutsceneExclude = {
+    "FigureHotelChase",
+    "Elevator1",
+    "MinesFinale"
+}
+
+local PromptTable = {
+    GamePrompts = {},
+    Aura = {
+        ["ActivateEventPrompt"] = false,
+        ["AwesomePrompt"] = true,
+        ["FusesPrompt"] = true,
+        ["HerbPrompt"] = false,
+        ["LeverPrompt"] = true,
+        ["LootPrompt"] = false,
+        ["ModulePrompt"] = true,
+        ["SkullPrompt"] = false,
+        ["UnlockPrompt"] = true,
+        ["ValvePrompt"] = false,
+        ["PropPrompt"] = true
+    },
+    AuraObjects = { "Lock", "Button" },
+    Clip = {
+        "AwesomePrompt", "FusesPrompt", "HerbPrompt", "HidePrompt",
+        "LeverPrompt", "LootPrompt", "ModulePrompt", "Prompt",
+        "PushPrompt", "SkullPrompt", "UnlockPrompt", "ValvePrompt"
+    },
+    ClipObjects = { "LeverForGate", "LiveBreakerPolePickup", "LiveHintBook", "Button" },
+    Excluded = {
+        Prompt = { "HintPrompt", "InteractPrompt" },
+        Parent = { "KeyObtainFake", "Padlock" },
+        ModelAncestor = { "DoorFake" }
+    }
+}
+
+local MinecartPathNodeColor = {
+    Disabled = nil,
+    Red = Color3.new(1, 0, 0),
+    Yellow = Color3.new(1, 1, 0),
+    Purple = Color3.new(1, 0, 1),
+    Green = Color3.new(0, 1, 0),
+    Cyan = Color3.new(0, 1, 1),
+    Orange = Color3.new(1, 0.5, 0),
+    White = Color3.new(1, 1, 1),
+}
+
+local MinecartPathfind = {}
+
+-- ══════════════════════════════════════════════════════════════════
+-- 4. 预设颜色 & SETTINGS
 -- ══════════════════════════════════════════════════════════════════
 local PRESET_COLORS = {
     Color3.fromRGB(255, 0, 0),
@@ -112,6 +233,14 @@ local SETTINGS = {
     ClosetExitFix = false,
     NoBreaker = false,
     DisableEyes = false,
+    DisableFigure = false,
+    DisableAmbush = false,
+    DisableRush = false,
+    DisableA60 = false,
+    DisableA120 = false,
+    DisableJeffTheKiller = false,
+    DisableGloombatSwarm = false,
+    EntityNotify = false,
 
     InstantInteract = false,
     EnableInteractions = false,
@@ -137,71 +266,89 @@ local SETTINGS = {
     AntiAFK = false,
     RainbowBorder = false,
     RainbowSpeed = 1,
+
+    AutoWardrobe = false,
+    FakeRevive = false,
+    InfCrucifixVelocity = false,
+    SpeedBypass = false,
+    MinecartPathESP = false,
+    MinecartPathColor = "Yellow",
+    FakeReviveKeybind = Enum.KeyCode.X,
 }
 
 -- ══════════════════════════════════════════════════════════════════
--- 4. 全局变量
+-- 5. 全局变量
 -- ══════════════════════════════════════════════════════════════════
 local espHighlights = {}
+local entityNotified = {}
 local heartbeatConnection = nil
 local noclipConnection = nil
 local flyConnection = nil
 local infJumpConnection = nil
 local antiAFKConnection = nil
 local speedConnection = nil
+local entityCheckConnection = nil
+local autoWardrobeConnection = nil
+local fakeReviveConnection = nil
+local crucifixVelocityConnection = nil
+local speedBypassConnection = nil
+local minecartPathConnection = nil
 local isDestroyed = false
 local Window = nil
-local flyVelocity = Vector3.new(0, 0, 0)
 local lastESPUpdate = 0
+local lastEntityCheck = 0
+local lastAutoWardrobeCheck = 0
+local lastSpeedBypass = 0
+local fakeReviveDebounce = false
+local fakeReviveEnabled = false
 
 local ESP_Items = {
-    ["Key"] = true,
-    ["Book"] = true,
-    ["Lighter"] = true,
-    ["Lockpicks"] = true,
-    ["Vitamins"] = true,
-    ["Crucifix"] = true,
-    ["SkeletonKey"] = true,
-    ["Flashlight"] = true,
-    ["Candle"] = true,
-    ["Fuse"] = true,
-    ["Shears"] = true,
-    ["Battery"] = true,
-    ["Paper"] = true,
-    ["ElectricalKey"] = true,
-    ["Shakelight"] = true,
+    ["Key"] = true, ["Book"] = true, ["Lighter"] = true,
+    ["Lockpicks"] = true, ["Vitamins"] = true, ["Crucifix"] = true,
+    ["SkeletonKey"] = true, ["Flashlight"] = true, ["Candle"] = true,
+    ["Fuse"] = true, ["Shears"] = true, ["Battery"] = true,
+    ["Paper"] = true, ["ElectricalKey"] = true, ["Shakelight"] = true,
     ["iPad"] = true,
 }
 
 local ESP_Entities = {
-    ["Rush"] = true,
-    ["Ambush"] = true,
-    ["Figure"] = true,
-    ["Seek"] = true,
-    ["Screech"] = true,
-    ["Eyes"] = true,
-    ["Snare"] = true,
-    ["A60"] = true,
-    ["A120"] = true,
-}
-
-local ESP_Others = {
-    ["Door"] = true,
-    ["Lever"] = true,
-    ["Gold"] = true,
+    ["Rush"] = true, ["Ambush"] = true, ["Figure"] = true,
+    ["Seek"] = true, ["Screech"] = true, ["Eyes"] = true,
+    ["Snare"] = true, ["A60"] = true, ["A120"] = true,
+    ["BackdoorRush"] = true, ["BackdoorLookman"] = true,
+    ["JeffTheKiller"] = true, ["GloombatSwarm"] = true,
 }
 
 -- ══════════════════════════════════════════════════════════════════
--- 5. 工具函数
+-- 6. FLOOR 检测
 -- ══════════════════════════════════════════════════════════════════
-local function notify(title, content, duration, ntype)
+local function getCurrentFloor()
+    local success, result = pcall(function()
+        local gameData = ReplicatedStorage:FindFirstChild("GameData")
+        if gameData then
+            local floor = gameData:FindFirstChild("Floor")
+            if floor then return floor.Value end
+        end
+        return "Hotel"
+    end)
+    return success and result or "Hotel"
+end
+
+-- ══════════════════════════════════════════════════════════════════
+-- 7. 工具函数
+-- ══════════════════════════════════════════════════════════════════
+local function notify(title, content, duration, ntype, imageId)
     if Window then
-        Window:Notify({
+        local notifyData = {
             Title    = title,
             Content  = content,
             Duration = duration or 3,
             Type     = ntype or "Info"
-        })
+        }
+        if imageId then
+            notifyData.Image = "rbxassetid://" .. tostring(imageId)
+        end
+        Window:Notify(notifyData)
     else
         pcall(function()
             StarterGui:SetCore("SendNotification", {
@@ -227,8 +374,28 @@ local function getHumanoid()
     return char and char:FindFirstChildOfClass("Humanoid")
 end
 
+local function distanceFromCharacter(inst)
+    local root = getRoot()
+    if not root or not inst then return math.huge end
+    local instPos
+    if inst:IsA("BasePart") then
+        instPos = inst.Position
+    elseif inst:IsA("Model") then
+        instPos = inst.PrimaryPart and inst.PrimaryPart.Position or inst:GetPivot().Position
+    else
+        local ancestor = inst:FindFirstAncestorWhichIsA("BasePart") or inst:FindFirstAncestorWhichIsA("Model")
+        if ancestor then
+            if ancestor:IsA("BasePart") then instPos = ancestor.Position
+            elseif ancestor:IsA("Model") then instPos = ancestor.PrimaryPart and ancestor.PrimaryPart.Position or ancestor:GetPivot().Position
+            end
+        end
+    end
+    if not instPos then return math.huge end
+    return (instPos - root.Position).Magnitude
+end
+
 -- ══════════════════════════════════════════════════════════════════
--- 6. ESP 核心
+-- 8. ESP 核心
 -- ══════════════════════════════════════════════════════════════════
 local function clearESP()
     for _, hl in pairs(espHighlights) do
@@ -290,6 +457,12 @@ local function isGold(inst)
     return name:find("gold") or (inst:IsA("BasePart") and inst.Color and (inst.Color.R > 0.9 and inst.Color.G > 0.7 and inst.Color.B < 0.3))
 end
 
+local function isMinecartTrack(inst)
+    if not inst then return false end
+    local name = inst.Name:lower()
+    return name:find("minecart") or name:find("track") or name:find("minecarttrack")
+end
+
 local function updateESP()
     if isDestroyed then return end
     local now = tick()
@@ -297,7 +470,7 @@ local function updateESP()
     lastESPUpdate = now
 
     local success, err = pcall(function()
-        local enabledAny = SETTINGS.DoorsESP or SETTINGS.CabinetESP or SETTINGS.ChestESP or SETTINGS.EntityESP or SETTINGS.OtherESP
+        local enabledAny = SETTINGS.DoorsESP or SETTINGS.CabinetESP or SETTINGS.ChestESP or SETTINGS.EntityESP or SETTINGS.OtherESP or SETTINGS.MinecartPathESP
         if not enabledAny then
             for part, hl in pairs(espHighlights) do
                 if hl then hl.Enabled = false end
@@ -335,7 +508,12 @@ local function updateESP()
                 end
                 if checkEntityName(v.Name) then
                     if v:IsA("Model") or v:IsA("BasePart") then
-                        createHighlight(v, Color3.fromRGB(255, 0, 0), v.Name)
+                        local hlColor = Color3.fromRGB(255, 0, 0)
+                        local shortName = EntityTable.ShortNames[v.Name]
+                        if shortName then
+                            hlColor = Color3.fromRGB(255, 100, 0)
+                        end
+                        createHighlight(v, hlColor, v.Name)
                     end
                 end
             end
@@ -351,6 +529,13 @@ local function updateESP()
                     createHighlight(v, Color3.fromRGB(255, 215, 0), "Gold")
                 end
             end
+
+            if SETTINGS.MinecartPathESP and isMinecartTrack(v) then
+                if v:IsA("Model") or v:IsA("BasePart") then
+                    local pathColor = MinecartPathNodeColor[SETTINGS.MinecartPathColor] or MinecartPathNodeColor.Yellow
+                    createHighlight(v, pathColor, "MinecartPath")
+                end
+            end
         end
 
         for part, hl in pairs(espHighlights) do
@@ -364,7 +549,7 @@ local function updateESP()
 end
 
 -- ══════════════════════════════════════════════════════════════════
--- 7. Entity 拦截
+-- 9. Entity 拦截 & 检测
 -- ══════════════════════════════════════════════════════════════════
 local function setupEntityInterceptors()
     pcall(function()
@@ -385,6 +570,13 @@ local function setupEntityInterceptors()
                     if SETTINGS.DisableGlitch and moduleName:lower():find("glitch") then blocked = true end
                     if SETTINGS.DisableSnare and moduleName:lower():find("snare") then blocked = true end
                     if SETTINGS.DisableEyes and moduleName:lower():find("eyes") then blocked = true end
+                    if SETTINGS.DisableFigure and moduleName:lower():find("figure") then blocked = true end
+                    if SETTINGS.DisableAmbush and moduleName:lower():find("ambush") then blocked = true end
+                    if SETTINGS.DisableRush and moduleName:lower():find("rush") then blocked = true end
+                    if SETTINGS.DisableA60 and moduleName:lower():find("a60") then blocked = true end
+                    if SETTINGS.DisableA120 and moduleName:lower():find("a120") then blocked = true end
+                    if SETTINGS.DisableJeffTheKiller and moduleName:lower():find("jeff") then blocked = true end
+                    if SETTINGS.DisableGloombatSwarm and moduleName:lower():find("gloombat") then blocked = true end
                     if blocked then
                         return nil
                     end
@@ -431,9 +623,7 @@ local function setupEntityInterceptors()
             LocalPlayer.CharacterAdded:Connect(function()
                 task.wait(1)
                 local hum = getHumanoid()
-                if hum then
-                    hum.Sit = false
-                end
+                if hum then hum.Sit = false end
             end)
         end
     end)
@@ -451,8 +641,206 @@ local function setupEntityInterceptors()
     end)
 end
 
+local function checkEntityNotifications()
+    if isDestroyed or not SETTINGS.EntityNotify then return end
+    local now = tick()
+    if now - lastEntityCheck < 0.5 then return end
+    lastEntityCheck = now
+
+    pcall(function()
+        for _, v in pairs(Workspace:GetDescendants()) do
+            local name = v.Name
+            local isEntity = false
+            for _, ename in ipairs(EntityTable.Names) do
+                if name:lower():find(ename:lower()) then isEntity = true; break end
+            end
+            for _, sname in ipairs(EntityTable.SideNames) do
+                if name:lower():find(sname:lower()) then isEntity = true; break end
+            end
+            if isEntity and not entityNotified[name] then
+                entityNotified[name] = true
+                local notifyData = EntityTable.NotifyReason[name]
+                local shortName = EntityTable.ShortNames[name] or name
+                local msg = EntityTable.NotifyMessage[name] or (shortName .. " 已出现!")
+                local imageId = notifyData and notifyData.Image
+                notify("⚠️ 实体警告", msg, 5, "Warning", imageId)
+            end
+        end
+
+        for name, _ in pairs(entityNotified) do
+            local found = false
+            for _, v in pairs(Workspace:GetDescendants()) do
+                if v.Name == name then found = true; break end
+            end
+            if not found then entityNotified[name] = nil end
+        end
+    end)
+end
+
 -- ══════════════════════════════════════════════════════════════════
--- 8. 移动 & 交互逻辑
+-- 10. AutoWardrobe
+-- ══════════════════════════════════════════════════════════════════
+local function setupAutoWardrobe()
+    if autoWardrobeConnection then autoWardrobeConnection:Disconnect(); autoWardrobeConnection = nil end
+    if not SETTINGS.AutoWardrobe then return end
+
+    autoWardrobeConnection = RunService.Heartbeat:Connect(function()
+        if isDestroyed or not SETTINGS.AutoWardrobe then return end
+        local now = tick()
+        if now - lastAutoWardrobeCheck < 0.3 then return end
+        lastAutoWardrobeCheck = now
+
+        local root = getRoot()
+        if not root then return end
+        local currentFloor = getCurrentFloor()
+        local hidingName = HidingPlaceName[currentFloor] or "Closet"
+
+        pcall(function()
+            for _, entityName in ipairs(EntityTable.AutoWardrobe.Entities) do
+                local foundEntity = nil
+                for _, v in pairs(Workspace:GetDescendants()) do
+                    if v.Name:lower():find(entityName:lower()) then
+                        if v:IsA("Model") or v:IsA("BasePart") then
+                            foundEntity = v
+                            break
+                        end
+                    end
+                end
+
+                if foundEntity then
+                    local distance = EntityTable.AutoWardrobe.Distance[entityName] or 150
+                    local dist = distanceFromCharacter(foundEntity)
+
+                    if dist <= distance then
+                        local nearestHiding = nil
+                        local nearestDist = math.huge
+
+                        for _, v in pairs(Workspace:GetDescendants()) do
+                            if v.Name:lower():find(hidingName:lower()) then
+                                if v:IsA("Model") or v:IsA("BasePart") then
+                                    local d = distanceFromCharacter(v)
+                                    if d < nearestDist then
+                                        nearestDist = d
+                                        nearestHiding = v
+                                    end
+                                end
+                            end
+                        end
+
+                        if nearestHiding then
+                            local prompt = nil
+                            if nearestHiding:IsA("Model") then
+                                prompt = nearestHiding:FindFirstChildWhichIsA("ProximityPrompt", true)
+                            else
+                                prompt = nearestHiding:FindFirstChildWhichIsA("ProximityPrompt", true)
+                            end
+                            if prompt then
+                                pcall(function() firesignal(prompt.Triggered, LocalPlayer) end)
+                            end
+                        end
+                    end
+                end
+            end
+        end)
+    end)
+end
+
+-- ══════════════════════════════════════════════════════════════════
+-- 11. FakeRevive
+-- ══════════════════════════════════════════════════════════════════
+local function setupFakeRevive()
+    if fakeReviveConnection then fakeReviveConnection:Disconnect(); fakeReviveConnection = nil end
+    if not SETTINGS.FakeRevive then return end
+
+    fakeReviveConnection = RunService.Heartbeat:Connect(function()
+        if isDestroyed or not SETTINGS.FakeRevive then return end
+        local hum = getHumanoid()
+        if not hum then return end
+
+        if fakeReviveEnabled and fakeReviveDebounce then
+            fakeReviveDebounce = false
+            pcall(function()
+                hum.Health = 100
+                hum.MaxHealth = 100
+                hum:ChangeState(Enum.HumanoidStateType.Running)
+                LocalPlayer:SetAttribute("Alive", true)
+            end)
+        end
+
+        fakeReviveEnabled = hum.Health <= 0
+    end)
+end
+
+-- ══════════════════════════════════════════════════════════════════
+-- 12. InfCrucifixVelocity
+-- ══════════════════════════════════════════════════════════════════
+local function setupInfCrucifixVelocity()
+    if crucifixVelocityConnection then crucifixVelocityConnection:Disconnect(); crucifixVelocityConnection = nil end
+    if not SETTINGS.InfCrucifixVelocity then return end
+
+    crucifixVelocityConnection = RunService.Heartbeat:Connect(function()
+        if isDestroyed or not SETTINGS.InfCrucifixVelocity then return end
+        local root = getRoot()
+        if not root then return end
+
+        pcall(function()
+            for _, entityName in ipairs({"RushMoving", "AmbushMoving", "A60", "A120"}) do
+                local ec = EntityTable.InfCrucifixVelocity[entityName]
+                if not ec then
+                    local altName = entityName:gsub("Moving", "New")
+                    ec = EntityTable.InfCrucifixVelocity[altName]
+                end
+                if not ec then continue end
+
+                local foundEntity = nil
+                for _, v in pairs(Workspace:GetDescendants()) do
+                    if v.Name:lower():find(entityName:lower()) then
+                        if v:IsA("Model") or v:IsA("BasePart") then
+                            foundEntity = v
+                            break
+                        end
+                    end
+                end
+
+                if foundEntity then
+                    local dist = distanceFromCharacter(foundEntity)
+                    if dist <= (ec.minDistance or 50) then
+                        local velocity = ec.threshold or 50
+                        root.Velocity = Vector3.new(0, velocity, 0)
+                    end
+                end
+            end
+        end)
+    end)
+end
+
+-- ══════════════════════════════════════════════════════════════════
+-- 13. SpeedBypass
+-- ══════════════════════════════════════════════════════════════════
+local function setupSpeedBypass()
+    if speedBypassConnection then speedBypassConnection:Disconnect(); speedBypassConnection = nil end
+    if not SETTINGS.SpeedBypass then return end
+
+    speedBypassConnection = RunService.Heartbeat:Connect(function()
+        if isDestroyed or not SETTINGS.SpeedBypass then return end
+        local now = tick()
+        if now - lastSpeedBypass < 0.5 then return end
+        lastSpeedBypass = now
+
+        local hum = getHumanoid()
+        if hum then
+            pcall(function()
+                local oldSpeed = hum.WalkSpeed
+                hum.WalkSpeed = 100
+                task.wait(0.05)
+                hum.WalkSpeed = oldSpeed
+            end)
+        end
+    end)
+end
+
+-- ══════════════════════════════════════════════════════════════════
+-- 14. 移动 & 交互逻辑
 -- ══════════════════════════════════════════════════════════════════
 local function updateSpeed()
     if isDestroyed then return end
@@ -549,16 +937,10 @@ local function setupAntiAFK()
     antiAFKConnection = RunService.Heartbeat:Connect(function()
         if isDestroyed then return end
         if SETTINGS.AntiAFK then
-            pcall(function()
-                LocalPlayer.Idled:Disconnect()
-            end)
-            local old = tick()
-            if tick() - old > 60 then
-                old = tick()
-                VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.W, false, nil)
-                task.wait(0.1)
-                VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.W, false, nil)
-            end
+            pcall(function() LocalPlayer.Idled:Disconnect() end)
+            VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.W, false, nil)
+            task.wait(0.1)
+            VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.W, false, nil)
         end
     end)
 end
@@ -566,12 +948,11 @@ end
 local function setupNoDark()
     if not SETTINGS.NoDark then return end
     pcall(function()
-        local lighting = game:GetService("Lighting")
-        lighting.Brightness = 2
-        lighting.Ambient = Color3.fromRGB(200, 200, 200)
-        lighting.OutdoorAmbient = Color3.fromRGB(200, 200, 200)
-        lighting.FogEnd = 10000
-        for _, eff in pairs(lighting:GetChildren()) do
+        Lighting.Brightness = 2
+        Lighting.Ambient = Color3.fromRGB(200, 200, 200)
+        Lighting.OutdoorAmbient = Color3.fromRGB(200, 200, 200)
+        Lighting.FogEnd = 10000
+        for _, eff in pairs(Lighting:GetChildren()) do
             if eff:IsA("ColorCorrectionEffect") or eff:IsA("BlurEffect") or eff:IsA("BloomEffect") then
                 eff.Enabled = false
             end
@@ -602,7 +983,9 @@ local function setupInstantInteract()
                             pcall(function()
                                 for _, v in pairs(Workspace:GetDescendants()) do
                                     if v:IsA("ProximityPrompt") then
-                                        local dist = (LocalPlayer.Character and LocalPlayer.Character.PrimaryPart and (v.Parent.Position - LocalPlayer.Character.PrimaryPart.Position).Magnitude or 999)
+                                        local root = getRoot()
+                                        local ppPos = v.Parent and v.Parent:IsA("BasePart") and v.Parent.Position or Vector3.new(0, 0, 0)
+                                        local dist = root and (ppPos - root.Position).Magnitude or 999
                                         if dist < maxDist then
                                             firesignal(v.Triggered, LocalPlayer)
                                         end
@@ -635,7 +1018,7 @@ local function setupInstantInteract()
 end
 
 -- ══════════════════════════════════════════════════════════════════
--- 9. Misc 辅助
+-- 15. Misc 辅助
 -- ══════════════════════════════════════════════════════════════════
 local function rejoin()
     notify("Rejoin", "正在重新加入...", 3, "Info")
@@ -653,6 +1036,12 @@ local function destroyScript()
     if infJumpConnection then infJumpConnection:Disconnect(); infJumpConnection = nil end
     if antiAFKConnection then antiAFKConnection:Disconnect(); antiAFKConnection = nil end
     if speedConnection then speedConnection:Disconnect(); speedConnection = nil end
+    if entityCheckConnection then entityCheckConnection:Disconnect(); entityCheckConnection = nil end
+    if autoWardrobeConnection then autoWardrobeConnection:Disconnect(); autoWardrobeConnection = nil end
+    if fakeReviveConnection then fakeReviveConnection:Disconnect(); fakeReviveConnection = nil end
+    if crucifixVelocityConnection then crucifixVelocityConnection:Disconnect(); crucifixVelocityConnection = nil end
+    if speedBypassConnection then speedBypassConnection:Disconnect(); speedBypassConnection = nil end
+    if minecartPathConnection then minecartPathConnection:Disconnect(); minecartPathConnection = nil end
     stopFly()
     clearESP()
     if Window then pcall(function() Window:Destroy() end) end
@@ -662,14 +1051,14 @@ local function destroyScript()
 end
 
 -- ══════════════════════════════════════════════════════════════════
--- 10. 构建 Quantum UI 界面
+-- 16. 构建 Quantum UI 界面
 -- ══════════════════════════════════════════════════════════════════
 Window = QuantumUI.new({
-    Title = "Doors 辅助",
-    Subtitle = "恐怖门",
+    Title = "Doors 辅助 v2.0",
+    Subtitle = "QuantumUI",
     ThemeColor = Color3.fromRGB(255, 150, 200),
     Transparency = 0.3,
-    Size = UDim2.new(0, 640, 0, 520),
+    Size = UDim2.new(0, 680, 0, 560),
     Keybind = Enum.KeyCode.RightShift,
 })
 
@@ -735,6 +1124,28 @@ ESPTab:AddToggle({
     end
 })
 
+ESPTab:AddSection({ Name = "⛏️ 矿井车路径 ESP" })
+
+ESPTab:AddToggle({
+    Name = "Minecart Path ESP",
+    Default = SETTINGS.MinecartPathESP,
+    Flag = "ESP_MinecartPath",
+    Callback = function(val)
+        SETTINGS.MinecartPathESP = val
+        notify("矿井车路径", val and "已启用" or "已禁用", 2, val and "Success" or "Warning")
+    end
+})
+
+ESPTab:AddDropdown({
+    Name = "路径颜色",
+    Items = {"Yellow", "Red", "Green", "Cyan", "Orange", "Purple", "White"},
+    Default = "Yellow",
+    Flag = "ESP_MinecartColor",
+    Callback = function(selected)
+        SETTINGS.MinecartPathColor = selected
+    end
+})
+
 ESPTab:AddSection({ Name = "🎨 ESP 颜色" })
 
 ESPTab:AddColorPicker({
@@ -771,7 +1182,7 @@ ESPTab:AddSlider({
     Callback = function(val) SETTINGS.ESPRefreshRate = val end
 })
 
-ESPTab:AddSection({ Name = "📋 物品列表" })
+ESPTab:AddSection({ Name = "📋 追踪列表" })
 ESPTab:AddParagraph({
     Title = "追踪物品",
     Content = table.concat({
@@ -787,6 +1198,8 @@ ESPTab:AddParagraph({
     Content = table.concat({
         "Rush | Ambush | Figure | Seek",
         "Screech | Eyes | Snare | A60 | A120",
+        "BackdoorRush | BackdoorLookman | JeffTheKiller",
+        "GloombatSwarm | FigureRig | GrumbleRig",
     }, "\n")
 })
 
@@ -868,6 +1281,76 @@ EntityTab:AddToggle({
     end
 })
 
+EntityTab:AddToggle({
+    Name = "禁用 Figure",
+    Default = SETTINGS.DisableFigure,
+    Flag = "Ent_DisableFigure",
+    Callback = function(val)
+        SETTINGS.DisableFigure = val
+        notify("Figure", val and "已禁用" or "已启用", 2, val and "Success" or "Warning")
+    end
+})
+
+EntityTab:AddToggle({
+    Name = "禁用 Ambush",
+    Default = SETTINGS.DisableAmbush,
+    Flag = "Ent_DisableAmbush",
+    Callback = function(val)
+        SETTINGS.DisableAmbush = val
+        notify("Ambush", val and "已禁用" or "已启用", 2, val and "Success" or "Warning")
+    end
+})
+
+EntityTab:AddToggle({
+    Name = "禁用 Rush",
+    Default = SETTINGS.DisableRush,
+    Flag = "Ent_DisableRush",
+    Callback = function(val)
+        SETTINGS.DisableRush = val
+        notify("Rush", val and "已禁用" or "已启用", 2, val and "Success" or "Warning")
+    end
+})
+
+EntityTab:AddToggle({
+    Name = "禁用 A60",
+    Default = SETTINGS.DisableA60,
+    Flag = "Ent_DisableA60",
+    Callback = function(val)
+        SETTINGS.DisableA60 = val
+        notify("A60", val and "已禁用" or "已启用", 2, val and "Success" or "Warning")
+    end
+})
+
+EntityTab:AddToggle({
+    Name = "禁用 A120",
+    Default = SETTINGS.DisableA120,
+    Flag = "Ent_DisableA120",
+    Callback = function(val)
+        SETTINGS.DisableA120 = val
+        notify("A120", val and "已禁用" or "已启用", 2, val and "Success" or "Warning")
+    end
+})
+
+EntityTab:AddToggle({
+    Name = "禁用 JeffTheKiller",
+    Default = SETTINGS.DisableJeffTheKiller,
+    Flag = "Ent_DisableJeff",
+    Callback = function(val)
+        SETTINGS.DisableJeffTheKiller = val
+        notify("JeffTheKiller", val and "已禁用" or "已启用", 2, val and "Success" or "Warning")
+    end
+})
+
+EntityTab:AddToggle({
+    Name = "禁用 GloombatSwarm",
+    Default = SETTINGS.DisableGloombatSwarm,
+    Flag = "Ent_DisableGloombat",
+    Callback = function(val)
+        SETTINGS.DisableGloombatSwarm = val
+        notify("GloombatSwarm", val and "已禁用" or "已启用", 2, val and "Success" or "Warning")
+    end
+})
+
 EntityTab:AddSection({ Name = "🛠️ 其他修复" })
 
 EntityTab:AddToggle({
@@ -897,6 +1380,19 @@ EntityTab:AddToggle({
     Callback = function(val)
         SETTINGS.NoBreaker = val
         notify("断路器", val and "已跳过" or "已恢复", 2, val and "Success" or "Warning")
+    end
+})
+
+EntityTab:AddSection({ Name = "🔔 实体通知" })
+
+EntityTab:AddToggle({
+    Name = "实体出现通知 (带图片)",
+    Default = SETTINGS.EntityNotify,
+    Flag = "Ent_Notify",
+    Callback = function(val)
+        SETTINGS.EntityNotify = val
+        entityNotified = {}
+        notify("实体通知", val and "已启用" or "已禁用", 2, val and "Success" or "Warning")
     end
 })
 
@@ -1064,7 +1560,110 @@ MovementTab:AddToggle({
     end
 })
 
--- ========== TAB 5: Keybinds ==========
+MovementTab:AddSection({ Name = "⚡ 速度绕过" })
+
+MovementTab:AddToggle({
+    Name = "SpeedBypass",
+    Default = SETTINGS.SpeedBypass,
+    Flag = "Move_SpeedBypass",
+    Callback = function(val)
+        SETTINGS.SpeedBypass = val
+        notify("SpeedBypass", val and "已启用" or "已禁用", 2, val and "Success" or "Warning")
+        setupSpeedBypass()
+    end
+})
+
+-- ========== TAB 5: Feature 新功能 ==========
+local FeatureTab = Window:AddTab({
+    Name = "Features",
+    Icon = "rbxassetid://6034281467"
+})
+
+FeatureTab:AddSection({ Name = "🤖 AutoWardrobe (自动躲柜子)" })
+
+FeatureTab:AddToggle({
+    Name = "AutoWardrobe",
+    Default = SETTINGS.AutoWardrobe,
+    Flag = "Feat_AutoWardrobe",
+    Callback = function(val)
+        SETTINGS.AutoWardrobe = val
+        notify("AutoWardrobe", val and "已启用" or "已禁用", 2, val and "Success" or "Warning")
+        setupAutoWardrobe()
+    end
+})
+
+FeatureTab:AddParagraph({
+    Title = "AutoWardrobe 说明",
+    Content = table.concat({
+        "当检测到 Rush/Ambush/A60/A120/BackdoorRush 接近时",
+        "自动进入最近的柜子/储物柜躲避",
+        "",
+        "Hotel/Backdoor/Fools → Closet",
+        "Mines/Rooms → Locker",
+        "",
+        "实体躲避距离:",
+        "  Rush/Blitz: 135 studs",
+        "  Ambush: 155 studs",
+        "  A60/A120: 200 studs",
+    }, "\n")
+})
+
+FeatureTab:AddSection({ Name = "💀 FakeRevive (假复活)" })
+
+FeatureTab:AddToggle({
+    Name = "FakeRevive",
+    Default = SETTINGS.FakeRevive,
+    Flag = "Feat_FakeRevive",
+    Callback = function(val)
+        SETTINGS.FakeRevive = val
+        notify("FakeRevive", val and "已启用" or "已禁用", 2, val and "Success" or "Warning")
+        setupFakeRevive()
+    end
+})
+
+FeatureTab:AddKeybind({
+    Name = "FakeRevive 快捷键",
+    Default = SETTINGS.FakeReviveKeybind,
+    Flag = "KB_FakeRevive",
+    ChangedCallback = function(key)
+        SETTINGS.FakeReviveKeybind = key
+    end
+})
+
+FeatureTab:AddParagraph({
+    Title = "FakeRevive 说明",
+    Content = table.concat({
+        "当角色死亡时自动复活",
+        "绕过死亡画面继续游戏",
+        "按绑定的快捷键手动触发",
+    }, "\n")
+})
+
+FeatureTab:AddSection({ Name = "✝️ InfCrucifixVelocity" })
+
+FeatureTab:AddToggle({
+    Name = "InfCrucifixVelocity",
+    Default = SETTINGS.InfCrucifixVelocity,
+    Flag = "Feat_Crucifix",
+    Callback = function(val)
+        SETTINGS.InfCrucifixVelocity = val
+        notify("InfCrucifixVelocity", val and "已启用" or "已禁用", 2, val and "Success" or "Warning")
+        setupInfCrucifixVelocity()
+    end
+})
+
+FeatureTab:AddParagraph({
+    Title = "InfCrucifixVelocity 说明",
+    Content = table.concat({
+        "当实体接近时给予无限向上速度",
+        "Rush/Blitz: 52 studs/s 向上, 55 触发距离",
+        "Ambush: 70 studs/s 向上, 80 触发距离",
+        "",
+        "模拟十字架( Crucifix )效果",
+    }, "\n")
+})
+
+-- ========== TAB 6: Keybinds ==========
 local KeybindsTab = Window:AddTab({
     Name = "Keybinds",
     Icon = "rbxassetid://6034996037"
@@ -1116,12 +1715,13 @@ KeybindsTab:AddParagraph({
         "穿墙键 - 开关 Noclip 模式",
         "飞行键 - 开关 Fly 模式",
         "Screech键 - 进入最近柜子/安全点",
+        "FakeRevive键 - 手动触发假复活",
         "WASD - 飞行方向控制",
         "Shift (飞行中) - 加速飞行",
     }, "\n")
 })
 
--- ========== TAB 6: Misc ==========
+-- ========== TAB 7: Misc ==========
 local MiscTab = Window:AddTab({
     Name = "Misc",
     Icon = "rbxassetid://6023243660"
@@ -1196,10 +1796,23 @@ MiscTab:AddDropdown({
     end
 })
 
+MiscTab:AddSection({ Name = "🏢 楼层信息" })
+
+MiscTab:AddParagraph({
+    Title = "支持楼层",
+    Content = table.concat({
+        "Hotel - 酒店 (原始楼层)",
+        "Mines - 矿井",
+        "Rooms - 房间",
+        "Backdoor - 后门",
+        "Fools - 愚人 (Super Hard Mode)",
+    }, "\n")
+})
+
 MiscTab:AddSection({ Name = "📖 About" })
 
 MiscTab:AddParagraph({
-    Title = "Doors 辅助 Features",
+    Title = "Doors 辅助 v2.0 Features",
     Content = table.concat({
         "✨ ESP 系统:",
         "  - 物品透视 (Key/Book/Lighter...)",
@@ -1207,15 +1820,16 @@ MiscTab:AddParagraph({
         "  - 宝箱透视 (Chest/Drawer)",
         "  - 实体透视 (Rush/Ambush/Figure...)",
         "  - 门/拉杆/黄金透视",
+        "  - 矿井车路径透视",
         "",
-        "🚫 Entity 拦截:",
-        "  - 禁用 Screech/Timothy/A90",
-        "  - 禁用 Seek/Glitch/Snare/Eyes",
-        "  - 衣柜修复 + 断路器跳过",
+        "🚫 Entity 拦截 (13种实体)",
         "",
-        "🤝 交互增强:",
-        "  - 即时交互 + 超远距离",
-        "  - 反黑暗 (NoDark)",
+        "🤖 新功能:",
+        "  - AutoWardrobe 自动躲柜子",
+        "  - FakeRevive 假复活",
+        "  - InfCrucifixVelocity 无限十字",
+        "  - SpeedBypass 速度绕过",
+        "  - Entity Notify 带图片通知",
         "",
         "🏃 移动作弊:",
         "  - 速度/跳跃加成",
@@ -1226,7 +1840,7 @@ MiscTab:AddParagraph({
 })
 
 -- ══════════════════════════════════════════════════════════════════
--- 11. 主初始化
+-- 17. 主初始化
 -- ══════════════════════════════════════════════════════════════════
 task.wait(0.5)
 
@@ -1234,15 +1848,20 @@ QuantumUI.RainbowEnabled = SETTINGS.RainbowBorder
 QuantumUI.RainbowSpeed = SETTINGS.RainbowSpeed
 
 heartbeatConnection = RunService.Heartbeat:Connect(updateESP)
+entityCheckConnection = RunService.Heartbeat:Connect(checkEntityNotifications)
 setupNoclip()
 setupInfJump()
 setupFly()
 setupSpeedConnection()
 setupAntiAFK()
 setupEntityInterceptors()
+setupAutoWardrobe()
+setupFakeRevive()
+setupInfCrucifixVelocity()
+setupSpeedBypass()
 
 -- ══════════════════════════════════════════════════════════════════
--- 12. 快捷键处理
+-- 18. 快捷键处理
 -- ══════════════════════════════════════════════════════════════════
 UserInputService.InputBegan:Connect(function(input, gameProcessed)
     if gameProcessed or isDestroyed then return end
@@ -1265,6 +1884,8 @@ UserInputService.InputBegan:Connect(function(input, gameProcessed)
         pcall(function()
             local char = getChar()
             if not char then return end
+            local currentFloor = getCurrentFloor()
+            local hidingName = HidingPlaceName[currentFloor] or "Closet"
             local closestCabinet = nil
             local closestDist = math.huge
             for _, v in pairs(Workspace:GetDescendants()) do
@@ -1287,24 +1908,39 @@ UserInputService.InputBegan:Connect(function(input, gameProcessed)
                 notify("安全屋", "附近未找到柜子", 2, "Warning")
             end
         end)
+    elseif key == SETTINGS.FakeReviveKeybind then
+        if SETTINGS.FakeRevive then
+            local hum = getHumanoid()
+            if hum then
+                fakeReviveDebounce = true
+                hum.Health = 100
+                hum.MaxHealth = 100
+                hum:ChangeState(Enum.HumanoidStateType.Running)
+                LocalPlayer:SetAttribute("Alive", true)
+                notify("FakeRevive", "已手动复活", 2, "Success")
+            end
+        end
     end
 end)
 
 -- ══════════════════════════════════════════════════════════════════
--- 13. 加载完成通知
+-- 19. 加载完成通知
 -- ══════════════════════════════════════════════════════════════════
 task.wait(0.3)
-notify("✅ Doors 辅助加载完成!",
-    "Quantum UI 版本 v1.0\n" ..
+notify("✅ Doors 辅助 v2.0 加载完成!",
+    "Quantum UI 版本 v2.0\n" ..
     "按 " .. SETTINGS.UIKeybind.Name .. " 切换 UI 显示\n" ..
+    "支持楼层: Hotel/Mines/Rooms/Backdoor/Fools\n" ..
     "PlaceId: 6839808510 / 7894711641",
     6, "Success")
 
 print("========================================")
-print(" Doors 辅助 v1.0 (Quantum UI 版) 加载完成")
+print(" Doors 辅助 v2.0 (QuantumUI) 加载完成")
 print("   UI切换    - " .. SETTINGS.UIKeybind.Name)
 print("   穿墙      - " .. SETTINGS.NoclipKeybind.Name)
 print("   飞行      - " .. SETTINGS.FlyKeybind.Name)
 print("   Screech   - " .. SETTINGS.ScreechSafeRoomKeybind.Name)
+print("   FakeRevive- " .. SETTINGS.FakeReviveKeybind.Name)
+print("   楼层支持  - Hotel/Mines/Rooms/Backdoor/Fools")
 print("   PlaceId   - 6839808510 / 7894711641")
 print("========================================")

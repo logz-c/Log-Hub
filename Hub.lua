@@ -1,7 +1,7 @@
 --[[
     ╔══════════════════════════════════════════════════════════════════╗
     ║                         LOG-HUB 脚本中心                          ║
-    ║                      Version 1.6.0                               ║
+    ║                      Version 1.7.0                               ║
     ║                         Created by log_quick                     ║
     ║                                                                  ║
     ║  功能：                                                          ║
@@ -63,7 +63,7 @@ local GAME_REGISTRY = {
         Name = "Doors (恐怖门)",
         PlaceIds = { 6839179744, 6839808510, 7894711641, 7542019739, 7951135890, 8114357705 },
         ScriptPath = "/Doors_QuantumUI.lua",
-        Description = "Doors 辅助: Item/Cabinet/Chest/Entity ESP + 实体拦截 (Screech/Timothy/A90/Seek/Glitch/Snare/Eyes) + 快速交互 + NoDark + 移动增强",
+        Description = "Doors v2.0: Item/Cabinet/Chest/Entity/Minecart ESP + 13种实体拦截 + AutoWardrobe + FakeRevive + Entity Notify(图片) + InfCrucifix + 全楼层支持(Hotel/Mines/Rooms/Backdoor/Fools) + NoDark + 移动增强",
     },
     -- 未来扩展:
     -- {
