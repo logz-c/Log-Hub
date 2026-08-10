@@ -1,7 +1,7 @@
 --[[
     ╔══════════════════════════════════════════════════════════════════╗
     ║                         LOG-HUB 脚本中心                          ║
-    ║                      Version 1.5.0                               ║
+    ║                      Version 1.6.0                               ║
     ║                         Created by log_quick                     ║
     ║                                                                  ║
     ║  功能：                                                          ║
@@ -46,6 +46,24 @@ local GAME_REGISTRY = {
         PlaceIds = { 142823291 },
         ScriptPath = "/MM2_QuantumUI.lua",
         Description = "MM2 辅助: Chams ESP / 角色检测 (凶手红/警长蓝/无辜绿) / Gun ESP / Xray / Grab Gun / 玩家传送 / 自定义热键",
+    },
+    {
+        Name = "Blade Ball (利刃球)",
+        PlaceIds = { 13772394625, 14732610803, 14915220621, 15144787112, 15264892126, 15509350986, 16281300371 },
+        ScriptPath = "/BladeBall_QuantumUI.lua",
+        Description = "利刃球辅助: AutoParry / BallESP / KillAura / Reach / AutoDash / AbilitySpam / 移动 (WalkSpeed/JumpPower/InfJump/NoClip/Fly) + 传送 + 主题",
+    },
+    {
+        Name = "Tower of Hell (地狱塔)",
+        PlaceIds = { 1962086868, 3582763398 },
+        ScriptPath = "/TowerOfHell_QuantumUI.lua",
+        Description = "地狱塔辅助: AutoWin / SkipStages / StageESP / 低重力 / 移动 (WalkSpeed/JumpPower/InfJump/NoClip/Fly) + 关卡传送 + 4 热键",
+    },
+    {
+        Name = "Doors (恐怖门)",
+        PlaceIds = { 6839808510, 7894711641, 7542019739 },
+        ScriptPath = "/Doors_QuantumUI.lua",
+        Description = "Doors 辅助: Item/Cabinet/Chest/Entity ESP + 实体拦截 (Screech/Timothy/A90/Seek/Glitch/Snare/Eyes) + 快速交互 + NoDark + 移动增强",
     },
     -- 未来扩展:
     -- {
@@ -198,7 +216,7 @@ local function loadGenericScript()
 
     local Window = QuantumUI.new({
         Title    = "通用模式 - " .. GameName,
-        Subtitle = "PlaceId: " .. tostring(PlaceId) .. "  |  Log-Hub v1.5.0",
+        Subtitle = "PlaceId: " .. tostring(PlaceId) .. "  |  Log-Hub v1.6.0",
         ThemeColor = Color3.fromRGB(0, 200, 255),
         Transparency = 0.3,
         Size     = UDim2.new(0, 560, 0, 440),
