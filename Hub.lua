@@ -61,7 +61,7 @@ local GAME_REGISTRY = {
     },
     {
         Name = "Doors (恐怖门)",
-        PlaceIds = { 6839808510, 7894711641, 7542019739 },
+        PlaceIds = { 6839179744, 6839808510, 7894711641, 7542019739, 7951135890, 8114357705 },
         ScriptPath = "/Doors_QuantumUI.lua",
         Description = "Doors 辅助: Item/Cabinet/Chest/Entity ESP + 实体拦截 (Screech/Timothy/A90/Seek/Glitch/Snare/Eyes) + 快速交互 + NoDark + 移动增强",
     },
