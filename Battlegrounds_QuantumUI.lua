@@ -328,51 +328,61 @@ local function toggleHitboxExpander(enabled)
     end
 end
 
--- Auto Block (来自源码: 检测附近攻击并自动格挡)
+-- Auto Block (源码还原: TSB官方格挡键=F 按住持续格挡)
+local vim = game:GetService("VirtualInputManager")
+local blockHeld = false  -- F键当前是否处于按下状态
+
+local function pressBlock(hold)
+    if blockHeld == hold then return end
+    blockHeld = hold
+    pcall(function()
+        -- 优先使用执行器的 keypress/keyrelease，更可靠
+        if hold then
+            if keypress then keypress(Enum.KeyCode.F) return end
+            if vim then vim:SendKeyEvent(true, Enum.KeyCode.F, false, game) end
+        else
+            if keyrelease then keyrelease(Enum.KeyCode.F) return end
+            if vim then vim:SendKeyEvent(false, Enum.KeyCode.F, false, game) end
+        end
+    end)
+end
+
 local function toggleAutoBlock(enabled)
     if autoBlockConn then
         autoBlockConn:Disconnect()
         autoBlockConn = nil
     end
-    if enabled then
-        autoBlockConn = RunService.Heartbeat:Connect(function()
-            if isDestroyed then return end
-            local myRoot = getRoot()
-            if not myRoot then return end
-            -- 检测附近敌人的攻击动作
-            for _, player in ipairs(Players:GetPlayers()) do
-                if player ~= LocalPlayer and player.Character then
-                    local hrp = player.Character:FindFirstChild("HumanoidRootPart")
-                    local hum = player.Character:FindFirstChildOfClass("Humanoid")
-                    if hrp and hum and hum.Health > 0 then
-                        local dist = (myRoot.Position - hrp.Position).Magnitude
-                        if dist <= 12 then
-                            -- 检查敌人是否面朝自己且在攻击范围
-                            local direction = (myRoot.Position - hrp.Position).Unit
-                            local enemyLook = hrp.CFrame.LookVector
-                            local dot = direction:Dot(enemyLook)
-                            if dot > 0.7 then
-                                -- 敌人面朝自己，自动格挡
-                                pcall(function()
-                                    if VirtualUser then
-                                        VirtualUser:CaptureController()
-                                        -- 模拟右键格挡 (KeyF in TSB)
-                                        VirtualInputManager = VirtualInputManager or game:GetService("VirtualInputManager")
-                                        if VirtualInputManager then
-                                            VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.F, false, game)
-                                            task.wait(0.1)
-                                            VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.F, false, game)
-                                        end
-                                    end
-                                end)
-                                break
-                            end
+    if not enabled then
+        pressBlock(false)  -- 关闭时确保松开F
+        return
+    end
+    autoBlockConn = RunService.Heartbeat:Connect(function()
+        if isDestroyed then return end
+        local myRoot = getRoot()
+        if not myRoot then pressBlock(false) return end
+        local needBlock = false
+        -- 遍历12stud内的敌人，只要有一个面朝自己就需要格挡
+        for _, player in ipairs(Players:GetPlayers()) do
+            if player ~= LocalPlayer and player.Character then
+                local hrp = player.Character:FindFirstChild("HumanoidRootPart")
+                local hum = player.Character:FindFirstChildOfClass("Humanoid")
+                if hrp and hum and hum.Health > 0 then
+                    local dist = (myRoot.Position - hrp.Position).Magnitude
+                    if dist <= 12 then
+                        local direction = (myRoot.Position - hrp.Position).Unit
+                        local enemyLook = hrp.CFrame.LookVector
+                        local dot = direction:Dot(enemyLook)
+                        -- 敌人LookVector与"指向我"的方向夹角 < 45°，视为盯着我
+                        if dot > 0.7 then
+                            needBlock = true
+                            break
                         end
                     end
                 end
             end
-        end)
-    end
+        end
+        pressBlock(needBlock)
+    end)
 end
 
 -- Auto Attack (来自源码: 自动攻击最近敌人)
@@ -1289,29 +1299,36 @@ MiscTab:AddButton({
 MiscTab:AddSection({ Name = "信息" })
 
 MiscTab:AddParagraph({
-    Title   = "The Strongest Battlegrounds v1.0",
+    Title   = "The Strongest Battlegrounds v1.1",
     Content = table.concat({
         "基于真实源码还原 (Spectral_Hub + Antimony + Speed Hub X)",
-        "PlaceId: 10449761463",
+        "PlaceId: 10449761463   GameId: 3808081382",
+        "",
+        "TSB 官方控制 (来自游戏描述):",
+        "  G — Ultimate (觉醒/终极模式)",
+        "  F — Block (按住持续格挡) — Auto Block 会自动按 F",
+        "  Q — Dash (冲刺)  |  Ragdoll中按Q=Cancel翻滚取消",
+        "  连按W两次 — Run (奔跑)",
+        "  鼠标左键 — Punch (拳击/M1)",
+        "  B — Emote Wheel (表情轮盘)",
         "",
         "源码分析:",
-        "  技能系统: M1/技能1~4/终极/觉醒/冲刺",
-        "  状态系统: Stunned/Ragdoll/Blocking",
-        "  Mana系统: LocalPlayer.Mana (终极技能消耗)",
-        "  角色种类: Hero Hunter/Saitama/Garou/Ninja/Brute",
+        "  状态系统: Stunned / Ragdoll / Blocking",
+        "  评分公式: score = (100-HP) + Stunned/Ragdoll +500",
+        "  faceTarget 预测: targetHRP.Velocity * 0.2",
         "",
         "功能:",
-        "  • Kill Aura (范围自动攻击, 多因素优先级)",
+        "  • Kill Aura (多因素优先级评分)",
         "  • Hitbox Expander (碰撞箱扩大)",
-        "  • Auto Block + Auto Attack + Aimbot",
+        "  • Auto Block (F键按住) + Auto Attack + Aimbot",
         "  • No Cooldown + No Stun + No Ragdoll + No Dash CD",
         "  • WalkSpeed/JumpPower/InfJump/NoClip/Fly",
-        "  • Player ESP + 血量条 + 距离",
+        "  • Player ESP + 血量条 (绿黄红) + 距离",
         "  • Auto Farm (自动找敌+传送+攻击)",
-        "  • Auto Reset (低血量重置)",
+        "  • Auto Reset (低血量自动重置, 5-80%阈值)",
         "  • Rejoin + Server Hop + Anti-AFK",
         "",
-        "快捷键: RightShift 隐藏/显示 UI",
+        "脚本快捷键: T=传最近敌人  Y=NoClip  U=Fly  RightShift=UI",
     }, "\n"),
 })
 
@@ -1377,6 +1394,9 @@ local function cleanup()
     if aimbotConn then aimbotConn:Disconnect() end
     if antiAFKConn then antiAFKConn:Disconnect() end
     if _G.TSB_HitboxConn then _G.TSB_HitboxConn:Disconnect() _G.TSB_HitboxConn = nil end
+
+    -- 清理时必须松开格挡F键，否则玩家会一直处于格挡状态
+    pressBlock(false)
 
     if flyBV then flyBV:Destroy() end
     if flyBG then flyBG:Destroy() end

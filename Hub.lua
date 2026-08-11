@@ -82,8 +82,9 @@ local GAME_REGISTRY = {
     {
         Name = "The Strongest Battlegrounds (最强战场)",
         PlaceIds = { 10449761463 },
+        GameIds  = { 3808081382 },
         ScriptPath = "/Battlegrounds_QuantumUI.lua",
-        Description = "v1.0: 基于Spectral_Hub+Antimony+SpeedHubX源码还原 — Kill Aura(多因素优先级) + Hitbox Expander + Auto Block/Attack + Aimbot + No Cooldown + No Stun/Ragdoll/DashCD + WalkSpeed/JumpPower/InfJump/NoClip/Fly + Player ESP(血量条+距离) + Auto Farm(传送+攻击) + Auto Reset(低血量) + Rejoin/ServerHop + Anti-AFK + 快捷键(T/Y/U)",
+        Description = "v1.1: 基于Spectral_Hub源码还原 — 修复AutoBlock使用F键(官方格挡) + GameId(3808081382)双重匹配 + Kill Aura多因素评分 + Hitbox + AutoAttack/Aimbot + NoCD + NoStun/Ragdoll/DashCD + WalkSpeed/JumpPower/InfJump/NoClip/Fly + PlayerESP(血量条+距离) + AutoFarm + AutoReset + 快捷键(T传敌/Y穿墙/U飞行)",
     },
     -- 未来扩展:
     -- {
