@@ -766,96 +766,85 @@ local function updateESP()
                 if isDestroyed then return end
                 local name = v.Name
                 local isModelOrPart = v:IsA("Model") or v:IsA("BasePart")
-                if not isModelOrPart then continue end
+                if isModelOrPart then
+                    -- ===== 第一优先级：容器类（柜子/宝箱/书架/工具箱）=====
+                    -- 只有带交互 Prompt 的才是真正可交互容器，避免柜子子部件被误标
+                    local matchedAsContainer = false
 
-                -- ===== 第一优先级：容器类（柜子/宝箱/书架/工具箱）=====
-                -- 只有带交互 Prompt 的才是真正可交互容器，避免柜子子部件被误标
-                local matchedAsContainer = false
-
-                if SETTINGS.CabinetESP and isCabinet(v) then
-                    local hasPrompt = v:FindFirstChild("ActivateEventPrompt", true)
-                        or v:FindFirstChild("ModulePrompt", true)
-                    if hasPrompt or v:IsA("Model") then
-                        createHighlight(v, SETTINGS.CabinetESPColor, "Cabinet", "Cabinet", "Cabinet")
-                        matchedAsContainer = true
+                    if SETTINGS.CabinetESP and isCabinet(v) then
+                        local hasPrompt = v:FindFirstChild("ActivateEventPrompt", true)
+                            or v:FindFirstChild("ModulePrompt", true)
+                        if hasPrompt or v:IsA("Model") then
+                            createHighlight(v, SETTINGS.CabinetESPColor, "Cabinet", "Cabinet", "Cabinet")
+                            matchedAsContainer = true
+                        end
+                    elseif SETTINGS.ChestESP and isChest(v) then
+                        local hasPrompt = v:FindFirstChild("ActivateEventPrompt", true)
+                            or v:FindFirstChild("ModulePrompt", true)
+                        if hasPrompt or v:IsA("Model") then
+                            createHighlight(v, SETTINGS.ChestESPColor, "Chest", "Chest", "Chest")
+                            matchedAsContainer = true
+                        end
                     end
-                elseif SETTINGS.ChestESP and isChest(v) then
-                    local hasPrompt = v:FindFirstChild("ActivateEventPrompt", true)
-                        or v:FindFirstChild("ModulePrompt", true)
-                    if hasPrompt or v:IsA("Model") then
-                        createHighlight(v, SETTINGS.ChestESPColor, "Chest", "Chest", "Chest")
-                        matchedAsContainer = true
-                    end
-                end
 
-                -- 如果当前对象是容器，跳过后续物品/门的子匹配
-                if matchedAsContainer then
-                    -- 但也要检查容器是否是书本书架
-                    goto continue_scan
-                end
+                    -- 非容器且不在容器内部时，才匹配物品/门等
+                    if not matchedAsContainer and not isInsideContainer(v) then
+                        -- ===== 物品/钥匙/书本/断路器等 =====
+                        if SETTINGS.DoorsESP and ESP_Items[name] then
+                            if isRealPickup(v) then
+                                createHighlight(v, SETTINGS.DoorsESPColor, name, MiscPickups[name] or name, "Items")
+                            end
+                        end
 
-                -- ===== 第二优先级：跳过容器内部的装饰性子物体 =====
-                -- 容器内部的物品（书架里的假书/假打火机等）不单独标记
-                if isInsideContainer(v) then
-                    goto continue_scan
-                end
+                        if SETTINGS.KeyESP and (name == "KeyObtain" or name == "ElectricalKeyObtain") then
+                            if v:IsA("Model") and isRealPickup(v) then
+                                createHighlight(v, SETTINGS.KeyESPColor, "Door Key", "Door Key", "Key")
+                            end
+                        end
 
-                -- ===== 第三优先级：物品/钥匙/书本/断路器等 =====
-                if SETTINGS.DoorsESP and ESP_Items[name] then
-                    if isRealPickup(v) then
-                        createHighlight(v, SETTINGS.DoorsESPColor, name, MiscPickups[name] or name, "Items")
-                    end
-                end
+                        if SETTINGS.BookESP and name == "LiveHintBook" then
+                            if v:IsA("Model") and isRealPickup(v) then
+                                createHighlight(v, SETTINGS.BookESPColor, "Book", "Library Book", "Book")
+                            end
+                        end
 
-                if SETTINGS.KeyESP and (name == "KeyObtain" or name == "ElectricalKeyObtain") then
-                    if v:IsA("Model") and isRealPickup(v) then
-                        createHighlight(v, SETTINGS.KeyESPColor, "Door Key", "Door Key", "Key")
-                    end
-                end
+                        if SETTINGS.BreakerESP and (name == "LiveBreakerPolePickup" or name == "FuseObtain") then
+                            if v:IsA("Model") and isRealPickup(v) then
+                                createHighlight(v, SETTINGS.BreakerESPColor, "Breaker", name == "FuseObtain" and "Generator Fuse" or "Breaker Pole", "Breaker")
+                            end
+                        end
 
-                if SETTINGS.BookESP and name == "LiveHintBook" then
-                    if v:IsA("Model") and isRealPickup(v) then
-                        createHighlight(v, SETTINGS.BookESPColor, "Book", "Library Book", "Book")
-                    end
-                end
+                        if SETTINGS.AnchorESP and name == "MinesAnchor" then
+                            if v:IsA("Model") then
+                                createHighlight(v, SETTINGS.AnchorESPColor, "Anchor", "Anchor", "Anchor")
+                            end
+                        end
 
-                if SETTINGS.BreakerESP and (name == "LiveBreakerPolePickup" or name == "FuseObtain") then
-                    if v:IsA("Model") and isRealPickup(v) then
-                        createHighlight(v, SETTINGS.BreakerESPColor, "Breaker", name == "FuseObtain" and "Generator Fuse" or "Breaker Pole", "Breaker")
-                    end
-                end
+                        -- ===== 门/拉杆/金堆/矿车轨道 =====
+                        if SETTINGS.OtherESP then
+                            if isDoor(v) then
+                                createHighlight(v, SETTINGS.OtherESPColor, "Door", "Door", "Other")
+                            end
+                            if isLever(v) or name == "LeverForGate" or name == "TimerLever" then
+                                createHighlight(v, SETTINGS.LeverESPColor, "Lever", "Lever", "Other")
+                            end
+                            if isGold(v) then
+                                createHighlight(v, SETTINGS.GoldESPColor, "Gold", "Gold Pile", "Other")
+                            end
+                        end
 
-                if SETTINGS.AnchorESP and name == "MinesAnchor" then
-                    if v:IsA("Model") then
-                        createHighlight(v, SETTINGS.AnchorESPColor, "Anchor", "Anchor", "Anchor")
-                    end
-                end
+                        if SETTINGS.LeverESP and (name == "LeverForGate" or name == "TimerLever" or name == "MinesGenerator") then
+                            if v:IsA("Model") then
+                                createHighlight(v, SETTINGS.LeverESPColor, "Lever", name, "Lever")
+                            end
+                        end
 
-                -- ===== 第四优先级：门/拉杆/金堆/矿车轨道 =====
-                if SETTINGS.OtherESP then
-                    if isDoor(v) then
-                        createHighlight(v, SETTINGS.OtherESPColor, "Door", "Door", "Other")
-                    end
-                    if isLever(v) or name == "LeverForGate" or name == "TimerLever" then
-                        createHighlight(v, SETTINGS.LeverESPColor, "Lever", "Lever", "Other")
-                    end
-                    if isGold(v) then
-                        createHighlight(v, SETTINGS.GoldESPColor, "Gold", "Gold Pile", "Other")
-                    end
-                end
-
-                if SETTINGS.LeverESP and (name == "LeverForGate" or name == "TimerLever" or name == "MinesGenerator") then
-                    if v:IsA("Model") then
-                        createHighlight(v, SETTINGS.LeverESPColor, "Lever", name, "Lever")
+                        if SETTINGS.MinecartPathESP and isMinecartTrack(v) then
+                            local pathColor = MinecartPathNodeColor[SETTINGS.MinecartPathColor] or MinecartPathNodeColor.Yellow
+                            createHighlight(v, pathColor, "MinecartPath", "Minecart", "Minecart")
+                        end
                     end
                 end
-
-                if SETTINGS.MinecartPathESP and isMinecartTrack(v) then
-                    local pathColor = MinecartPathNodeColor[SETTINGS.MinecartPathColor] or MinecartPathNodeColor.Yellow
-                    createHighlight(v, pathColor, "MinecartPath", "Minecart", "Minecart")
-                end
-
-                ::continue_scan::
             end
         end
 
@@ -1427,9 +1416,7 @@ local function setupAutoInteract()
             if assets then
                 findLoot(assets)
                 for _, root2 in pairs(assets:GetChildren()) do
-                    if not (root2:IsA("Model") or root2:IsA("BasePart")) then
-                        continue
-                    end
+                    if (root2:IsA("Model") or root2:IsA("BasePart")) then
                     local rootName = root2.Name
                     local rootLName = rootName:lower()
                     -- 通用容器检测：匹配所有可能的抽屉/柜子/宝箱/工具箱类
@@ -1491,6 +1478,7 @@ local function setupAutoInteract()
                             end
                         end
                     end
+                    end -- 关闭 if (root2:IsA Model/BasePart)
                 end
             end
 
