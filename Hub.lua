@@ -79,6 +79,12 @@ local GAME_REGISTRY = {
         ScriptPath = "/Evade_QuantumUI.lua",
         Description = "v2.0: 基于真实源码还原 — 自动重生(ChangePlayerMode) + 即时复活/搬运(Interact Revive/Carry) + 自动复活 + 快速复活(ReviveTime) + Money/AFK/Ticket Farm + CFrame Speed Boost(MoveDirection) + NoClip/Fly + Nextbot/玩家/倒地/票券ESP + 全亮 + 移除障碍/KillBricks + Rejoin + Anti-AFK",
     },
+    {
+        Name = "The Strongest Battlegrounds (最强战场)",
+        PlaceIds = { 10449761463 },
+        ScriptPath = "/Battlegrounds_QuantumUI.lua",
+        Description = "v1.0: 基于Spectral_Hub+Antimony+SpeedHubX源码还原 — Kill Aura(多因素优先级) + Hitbox Expander + Auto Block/Attack + Aimbot + No Cooldown + No Stun/Ragdoll/DashCD + WalkSpeed/JumpPower/InfJump/NoClip/Fly + Player ESP(血量条+距离) + Auto Farm(传送+攻击) + Auto Reset(低血量) + Rejoin/ServerHop + Anti-AFK + 快捷键(T/Y/U)",
+    },
     -- 未来扩展:
     -- {
     --     Name = "Phantom Forces",
