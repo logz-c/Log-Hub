@@ -65,6 +65,12 @@ local GAME_REGISTRY = {
         ScriptPath = "/Doors_QuantumUI.lua",
         Description = "Doors v3.1 修复版: ESP过滤(仅真实物品/无装饰) + 抽屉自动打开 + 默认无加速 + Noclip恢复碰撞 + FOV修复 + 全ESP/自动交互躲藏/反实体/矿车/锚点/全楼层",
     },
+    {
+        Name = "Active +1 Speed Monkey Escape",
+        PlaceIds = { 1169737442 },
+        ScriptPath = "/MonkeyEscape_QuantumUI.lua",
+        Description = "Monkey Escape v1.0: 奖励点位传送 (世界一 1win~200Kwins / 世界二 1Mwins~1Twins) + 世界切换 + WalkSpeed/JumpPower/InfJump/NoClip/Fly + AntiAFK",
+    },
     -- 未来扩展:
     -- {
     --     Name = "Phantom Forces",
