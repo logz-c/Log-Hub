@@ -343,20 +343,18 @@ end
 local GameName = "Active +1 Speed Monkey Escape"
 local PlaceId   = game.PlaceId
 
-Window = QuantumUI:CreateWindow({
+Window = QuantumUI.new({
     Title    = "Monkey Escape",
-    Subtitle = "PlaceId: " .. tostring(PlaceId) .. "  |  v1.0",
-    Icon     = "rbxassetid://6035153470",
-    Size     = Vector2.new(520, 420),
-    Resizable = true,
-    MinSize   = Vector2.new(400, 300),
-    OnClose  = function()
-        if SETTINGS.ME_Fly then
-            toggleFly(false)
-            SETTINGS.ME_Fly = false
-        end
-    end,
+    Subtitle = "Active +1 Speed Monkey Escape",
+    ThemeColor = Color3.fromRGB(255, 140, 40),
+    Transparency = 0.3,
+    Size     = UDim2.new(0, 580, 0, 460),
+    Keybind  = Enum.KeyCode.RightShift,
 })
+
+_G.QuantumUI_Window = Window
+
+task.wait(3.5)
 
 -- ── TAB 1: 奖励传送 ──
 local TP_Tab = Window:AddTab({
