@@ -68,6 +68,7 @@ local GAME_REGISTRY = {
     {
         Name = "Active +1 Speed Monkey Escape",
         PlaceIds = { 1169737442 },
+        GameIds  = { 10144280947 },
         ScriptPath = "/MonkeyEscape_QuantumUI.lua",
         Description = "Monkey Escape v1.0: 奖励点位传送 (世界一 1win~200Kwins / 世界二 1Mwins~1Twins) + 世界切换 + WalkSpeed/JumpPower/InfJump/NoClip/Fly + AntiAFK",
     },
@@ -141,10 +142,18 @@ local function notify(title, text, duration)
 end
 
 local function detectGame()
+    local gameId = game.GameId
     for _, entry in ipairs(GAME_REGISTRY) do
-        for _, id in ipairs(entry.PlaceIds) do
+        for _, id in ipairs(entry.PlaceIds or {}) do
             if id == PlaceId then
                 return entry
+            end
+        end
+        if entry.GameIds and gameId and gameId ~= 0 then
+            for _, gid in ipairs(entry.GameIds) do
+                if gid == gameId then
+                    return entry
+                end
             end
         end
     end
