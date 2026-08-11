@@ -1,7 +1,7 @@
 --[[
     ╔══════════════════════════════════════════════════════════════════╗
     ║                         LOG-HUB 脚本中心                          ║
-    ║                      Version 1.9.0                               ║
+    ║                      Version 2.0.0                               ║
     ║                         Created by log_quick                     ║
     ║                                                                  ║
     ║  功能：                                                          ║
@@ -216,7 +216,7 @@ local function loadGenericScript()
 
     local Window = QuantumUI.new({
         Title    = "通用模式 - " .. GameName,
-        Subtitle = "PlaceId: " .. tostring(PlaceId) .. "  |  Log-Hub v1.9.0",
+        Subtitle = "PlaceId: " .. tostring(PlaceId) .. "  |  Log-Hub v2.0.0",
         ThemeColor = Color3.fromRGB(0, 200, 255),
         Transparency = 0.3,
         Size     = UDim2.new(0, 560, 0, 440),
@@ -343,6 +343,86 @@ local function loadGenericScript()
                     Window:Notify({ Title = "失败", Content = "执行器不支持剪贴板", Duration = 2, Type = "Error" })
                 end
                 print("[Log-Hub] 复制CFrame:", s)
+            end
+        end,
+    })
+
+    InfoTab:AddSection({ Name = "坐标传送" })
+
+    local tbX = InfoTab:AddTextbox({
+        Name = "X 坐标",
+        Placeholder = "例如: -683.382",
+        Default = "0",
+        ClearOnFocus = true,
+        Flag = "Generic_TpX",
+    })
+
+    local tbY = InfoTab:AddTextbox({
+        Name = "Y 坐标",
+        Placeholder = "例如: 32.139",
+        Default = "0",
+        ClearOnFocus = true,
+        Flag = "Generic_TpY",
+    })
+
+    local tbZ = InfoTab:AddTextbox({
+        Name = "Z 坐标",
+        Placeholder = "例如: -258.695",
+        Default = "0",
+        ClearOnFocus = true,
+        Flag = "Generic_TpZ",
+    })
+
+    InfoTab:AddButton({
+        Name = "📌 传送到输入坐标",
+        Callback = function()
+            local root = getRoot()
+            if not root then
+                Window:Notify({ Title = "失败", Content = "角色未加载", Duration = 2, Type = "Error" })
+                return
+            end
+            local x = tonumber(tbX and tbX:Get() or "")
+            local y = tonumber(tbY and tbY:Get() or "")
+            local z = tonumber(tbZ and tbZ:Get() or "")
+            if not x or not y or not z then
+                Window:Notify({ Title = "失败", Content = "X/Y/Z 必须是有效数字", Duration = 3, Type = "Error" })
+                return
+            end
+            local ok, err = pcall(function()
+                root.CFrame = CFrame.new(x, y, z)
+                local hum = getHum()
+                if hum then
+                    pcall(function() hum:SetStateEnabled(Enum.HumanoidStateType.FallingDown, false) end)
+                end
+            end)
+            if ok then
+                Window:Notify({
+                    Title = "传送成功",
+                    Content = string.format("已传送至 (%.2f, %.2f, %.2f)", x, y, z),
+                    Duration = 3, Type = "Success",
+                })
+                print(("[Log-Hub] 传送到坐标: Vector3.new(%.3f, %.3f, %.3f)"):format(x, y, z))
+            else
+                Window:Notify({ Title = "传送失败", Content = tostring(err), Duration = 3, Type = "Error" })
+                warn("[Log-Hub] 传送失败:", err)
+            end
+        end,
+    })
+
+    InfoTab:AddButton({
+        Name = "📥 填入当前坐标到输入框",
+        Callback = function()
+            local root = getRoot()
+            if root then
+                local p = root.Position
+                if tbX then tbX:Set(string.format("%.3f", p.X)) end
+                if tbY then tbY:Set(string.format("%.3f", p.Y)) end
+                if tbZ then tbZ:Set(string.format("%.3f", p.Z)) end
+                Window:Notify({
+                    Title = "已填入",
+                    Content = string.format("X:%.2f Y:%.2f Z:%.2f", p.X, p.Y, p.Z),
+                    Duration = 2, Type = "Info",
+                })
             end
         end,
     })
@@ -505,7 +585,9 @@ local function loadGenericScript()
             "1. Infinite Yield: 按 RightShift 打开命令行",
             "   (已后台自动加载，失败可按上方按钮手动加载)",
             "",
-            "2. 位置/信息 Tab: 实时坐标 + 复制坐标按钮",
+            "2. 位置/信息 Tab: 实时坐标 + 复制坐标",
+            "   + 坐标传送 (输入 X/Y/Z → 传送按钮)",
+            "   + 一键填入当前坐标到输入框",
             "",
             "3. 玩家 Tab: WalkSpeed / JumpPower / Anti-AFK",
             "",
@@ -518,7 +600,7 @@ local function loadGenericScript()
     Window:Notify({
         Title   = "通用模式已加载",
         Content = "游戏: " .. GameName .. "\nPlaceId: " .. tostring(PlaceId) ..
-                  "\n\nInfinite Yield (RightShift) +\n坐标获取 / WalkSpeed / JumpPower / Anti-AFK\n按 RightControl 切换 UI",
+                  "\n\nInfinite Yield (RightShift) +\n坐标获取 / 坐标传送 / WalkSpeed / JumpPower / Anti-AFK\n按 RightControl 切换 UI",
         Duration = 7,
         Type    = "Info",
     })
