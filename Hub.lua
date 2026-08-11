@@ -72,6 +72,13 @@ local GAME_REGISTRY = {
         ScriptPath = "/MonkeyEscape_QuantumUI.lua",
         Description = "v1.2: 奖励点传送 + 锁定循环传送(防拉回/可调延迟) + 自动切换奖励点(可调延迟) + 世界切换 + WalkSpeed/JumpPower/InfJump/NoClip/Fly + AntiAFK",
     },
+    {
+        Name = "Evade (Nextbot 逃生)",
+        PlaceIds = { 9872472334 },
+        GameIds  = { 11818772280 },
+        ScriptPath = "/Evade_QuantumUI.lua",
+        Description = "v1.0: Nextbot ESP(红)/玩家ESP(蓝)/物品ESP(金)/门ESP(绿) + 自动重生/自动拾取/自动开门 + WalkSpeed/JumpPower/InfJump/NoClip/Fly + 低重力/自定义FOV + 全亮/无雾 + Anti-AFK + 传送快捷键(T/Y/U)",
+    },
     -- 未来扩展:
     -- {
     --     Name = "Phantom Forces",
