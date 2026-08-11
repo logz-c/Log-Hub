@@ -1,6 +1,7 @@
 --[[
-    Doors 辅助脚本 v3.0 (QuantumUI)
+    Doors 辅助脚本 v3.1 (QuantumUI) - 修复版
     基于 LX Doors v3 / LOLHAX 源码重写 - 完整功能移植
+    修复：ESP仅真实物品/抽屉自动打开/默认无加速/Noclip碰撞恢复/FOV生效
     功能：ESP、自动交互、自动躲藏、反实体、绕过、通知、矿井车、锚点解谜、移动、全亮等
     PlaceIds:
         6839808510 - Doors (Hotel)
@@ -275,7 +276,7 @@ local SETTINGS = {
     IncreasedDistance = false, DoorRange = 20, NoDark = false, WasteItems = false,
 
     -- Movement
-    SpeedBoost = 50, JumpPower = 100, InfJump = false,
+    SpeedBoost = 0, JumpPower = 50, InfJump = false,
     Noclip = false, Fly = false, FlySpeed = 80, NoclipNext = false,
     NoAcceleration = false,
 
@@ -310,8 +311,7 @@ local SETTINGS = {
 -- ══════════════════════════════════════════════════════════════════
 -- 5. 全局变量
 -- ══════════════════════════════════════════════════════════════════
-local espHighlights = {}
-local espBillboards = {}
+-- espHighlights / espBillboards 在第8节 ESP 核心中声明（含分类管理）
 local entityNotified = {}
 local entityPredictions = {}
 local connections = {}
@@ -327,17 +327,37 @@ local padlockCode = nil
 local padlockCodeN = nil
 local oldFogEnd = Lighting.FogEnd
 local oldAccel = nil
+local oldFOV = nil
 local mainGame = nil
 local currentRooms = nil
 
 local ESP_Items = {
-    ["Key"] = true, ["Book"] = true, ["Lighter"] = true,
-    ["Lockpicks"] = true, ["Vitamins"] = true, ["Crucifix"] = true,
-    ["SkeletonKey"] = true, ["Flashlight"] = true, ["Candle"] = true,
-    ["Fuse"] = true, ["Shears"] = true, ["Battery"] = true,
-    ["Paper"] = true, ["ElectricalKey"] = true, ["Shakelight"] = true,
-    ["iPad"] = true,
+    ["Key"] = true, ["Lockpicks"] = true, ["Vitamins"] = true,
+    ["Crucifix"] = true, ["SkeletonKey"] = true, ["Flashlight"] = true,
+    ["Candle"] = true, ["Fuse"] = true, ["Shears"] = true,
+    ["BatteryPack"] = true, ["BandagePack"] = true, ["LaserPointer"] = true,
+    ["Bulklight"] = true, ["Lockpick"] = true, ["Bandage"] = true,
+    ["StarVial"] = true, ["Glowsticks"] = true, ["StarJug"] = true,
+    ["Battery"] = true, ["ElectricalKey"] = true, ["Shakelight"] = true,
+    ["iPad"] = true, ["Lighter"] = true, ["Straplight"] = true,
+    ["Candy"] = true, ["CrucifixWall"] = true,
 }
+
+-- 检查对象是否是真实可拾取的物品（有 ModulePrompt 的才是真的）
+local function isRealPickup(inst)
+    if not inst then return false end
+    -- 必须有 ModulePrompt / ActivateEventPrompt 才算真实可交互的
+    local hasPrompt = inst:FindFirstChild("ModulePrompt", true)
+        or inst:FindFirstChild("ActivateEventPrompt", true)
+        or inst:FindFirstChild("LootPrompt", true)
+    if not hasPrompt then return false end
+    -- 排除在 Modular_Bookshelf 内部的装饰性假物品（除非是 LiveHintBook）
+    local bookshelfAncestor = inst:FindFirstAncestor("Modular_Bookshelf")
+    if bookshelfAncestor and inst.Name ~= "LiveHintBook" then
+        return false
+    end
+    return true
+end
 
 local ESP_Entities = {
     ["Rush"] = true, ["Ambush"] = true, ["Figure"] = true,
@@ -523,11 +543,31 @@ local function solveAnchor(code, offset)
 end
 
 -- ══════════════════════════════════════════════════════════════════
--- 8. ESP 核心（Highlight + BillboardGui）
+-- 8. ESP 核心（Highlight + BillboardGui）- 按分类管理，关闭即清除
 -- ══════════════════════════════════════════════════════════════════
+-- 结构: espHighlights[adornee] = { hl=Highlight, bb=BillboardGui, cat="Doors" }
+local espHighlights = {}
+local espBillboards = {}
+
+-- 分类 → SETTINGS key 映射
+local ESP_CATEGORY_ENABLED = {
+    Items    = function() return SETTINGS.DoorsESP end,
+    Key      = function() return SETTINGS.KeyESP end,
+    Book     = function() return SETTINGS.BookESP end,
+    Breaker  = function() return SETTINGS.BreakerESP end,
+    Anchor   = function() return SETTINGS.AnchorESP end,
+    Cabinet  = function() return SETTINGS.CabinetESP end,
+    Chest    = function() return SETTINGS.ChestESP end,
+    Entity   = function() return SETTINGS.EntityESP end,
+    Other    = function() return SETTINGS.OtherESP end,
+    Lever    = function() return SETTINGS.LeverESP end,
+    Minecart = function() return SETTINGS.MinecartPathESP end,
+    Player   = function() return SETTINGS.PlayerESP end,
+}
+
 local function clearESP()
-    for _, hl in pairs(espHighlights) do
-        pcall(function() hl:Destroy() end)
+    for _, entry in pairs(espHighlights) do
+        pcall(function() if entry.hl then entry.hl:Destroy() end end)
     end
     for _, bb in pairs(espBillboards) do
         pcall(function() bb:Destroy() end)
@@ -536,19 +576,37 @@ local function clearESP()
     espBillboards = {}
 end
 
-local function createHighlight(part, color, name, textLabel)
+local function createHighlight(part, color, name, textLabel, category)
     if not part or not part:IsA("Instance") then return nil end
     local adornee = part:IsA("Model") and part or (part.Parent and part.Parent:IsA("Model") and part.Parent or part)
     local key = adornee
     local existing = espHighlights[key]
-    if existing then
-        existing.FillColor = color
-        existing.OutlineColor = color
-        existing.FillTransparency = SETTINGS.ESPFillTransparency
-        existing.OutlineTransparency = SETTINGS.ESPOutlineTransparency
-        existing.Enabled = true
-        return existing
+    if existing and existing.hl then
+        existing.hl.FillColor = color
+        existing.hl.OutlineColor = color
+        existing.hl.FillTransparency = SETTINGS.ESPFillTransparency
+        existing.hl.OutlineTransparency = SETTINGS.ESPOutlineTransparency
+        existing.hl.Enabled = true
+        existing.cat = category or "Unknown"
+        existing.fresh = true
+        -- 更新 billboard 文字
+        if espBillboards[key] and espBillboards[key]:FindFirstChild("TextLabel") then
+            espBillboards[key].TextLabel.Text = textLabel or name or ""
+            espBillboards[key].TextLabel.TextColor3 = color
+            espBillboards[key].Enabled = SETTINGS.ESPName
+        end
+        return existing.hl
     end
+    -- 清理旧的残留
+    if existing then
+        if existing.hl then pcall(function() existing.hl:Destroy() end) end
+        espHighlights[key] = nil
+    end
+    if espBillboards[key] then
+        pcall(function() espBillboards[key]:Destroy() end)
+        espBillboards[key] = nil
+    end
+
     local hl = Instance.new("Highlight")
     hl.Name = "DoorsESP_" .. (name or "Item")
     hl.Adornee = adornee
@@ -559,7 +617,7 @@ local function createHighlight(part, color, name, textLabel)
     hl.Enabled = true
     hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
     hl.Parent = CoreGui
-    espHighlights[key] = hl
+    espHighlights[key] = { hl = hl, cat = category or "Unknown", fresh = true }
 
     if textLabel and SETTINGS.ESPName then
         local bb = Instance.new("BillboardGui")
@@ -589,13 +647,35 @@ local function removeESPFor(inst)
     if not inst then return end
     local adornee = inst:IsA("Model") and inst or (inst.Parent and inst.Parent:IsA("Model") and inst.Parent or inst)
     if espHighlights[adornee] then
-        pcall(function() espHighlights[adornee]:Destroy() end)
+        pcall(function() if espHighlights[adornee].hl then espHighlights[adornee].hl:Destroy() end end)
         espHighlights[adornee] = nil
     end
     if espBillboards[adornee] then
         pcall(function() espBillboards[adornee]:Destroy() end)
         espBillboards[adornee] = nil
     end
+end
+
+-- 移除指定分类的所有 ESP（当该分类被关闭时调用）
+local function removeESPByCategory(cat)
+    for key, entry in pairs(espHighlights) do
+        if entry.cat == cat then
+            pcall(function() if entry.hl then entry.hl:Destroy() end end)
+            espHighlights[key] = nil
+            if espBillboards[key] then
+                pcall(function() espBillboards[key]:Destroy() end)
+                espBillboards[key] = nil
+            end
+        end
+    end
+end
+
+-- 检查实体名称是否匹配
+local function checkEntityName(ename)
+    for k in pairs(ESP_Entities) do
+        if ename:lower():find(k:lower()) then return true end
+    end
+    return false
 end
 
 local function updateESP()
@@ -605,107 +685,134 @@ local function updateESP()
     lastESPUpdate = now
 
     local success, err = pcall(function()
-        local enabledAny = SETTINGS.DoorsESP or SETTINGS.CabinetESP or SETTINGS.ChestESP
-            or SETTINGS.EntityESP or SETTINGS.OtherESP or SETTINGS.PlayerESP
-            or SETTINGS.MinecartPathESP or SETTINGS.BookESP or SETTINGS.BreakerESP
-            or SETTINGS.AnchorESP or SETTINGS.LeverESP or SETTINGS.KeyESP or SETTINGS.GoldESP
-        if not enabledAny then
-            for part, hl in pairs(espHighlights) do
-                if hl then hl.Enabled = false end
+        -- Step 1: 检查所有现有 ESP 的分类是否仍然启用，不启用则立即移除
+        for key, entry in pairs(espHighlights) do
+            local catEnabled = false
+            local checker = ESP_CATEGORY_ENABLED[entry.cat]
+            if checker then
+                catEnabled = checker()
             end
-            for part, bb in pairs(espBillboards) do
-                if bb then bb.Enabled = false end
+            if not catEnabled then
+                -- 该分类已关闭，移除 ESP
+                pcall(function() if entry.hl then entry.hl:Destroy() end end)
+                espHighlights[key] = nil
+                if espBillboards[key] then
+                    pcall(function() espBillboards[key]:Destroy() end)
+                    espBillboards[key] = nil
+                end
+            else
+                -- 标记为待刷新
+                entry.fresh = false
             end
-            return
         end
 
-        for _, v in pairs(Workspace:GetDescendants()) do
+        -- Step 2: 限制扫描范围 - 优先扫描 CurrentRooms，大幅减少遍历量
+        local scanTargets = {}
+        local rooms = getRooms()
+        if rooms then
+            -- 只扫描当前房间和相邻房间（而非所有房间）
+            local currentId = getCurrentRoomId()
+            if currentId and currentId > 0 then
+                for offset = -1, 2 do
+                    local rid = currentId + offset
+                    local room = rooms:FindFirstChild(tostring(rid))
+                    if room then
+                        table.insert(scanTargets, room)
+                    end
+                end
+            else
+                -- fallback：扫描所有房间
+                for _, room in pairs(rooms:GetChildren()) do
+                    table.insert(scanTargets, room)
+                end
+            end
+        end
+
+        -- 扫描房间内的物品
+        for _, room in ipairs(scanTargets) do
             if isDestroyed then return end
-            local name = v.Name
-            local lname = name:lower()
+            for _, v in pairs(room:GetDescendants()) do
+                if isDestroyed then return end
+                local name = v.Name
 
-            -- 物品 / Key / Book / Breaker
-            if SETTINGS.DoorsESP and ESP_Items[name] then
-                if v:IsA("BasePart") or v:IsA("Model") then
-                    createHighlight(v, SETTINGS.DoorsESPColor, name, name)
-                end
-            end
-
-            if SETTINGS.KeyESP and (name == "KeyObtain" or name == "ElectricalKeyObtain") then
-                if v:IsA("Model") then
-                    createHighlight(v, SETTINGS.KeyESPColor, "Door Key", "Door Key")
-                end
-            end
-
-            if SETTINGS.BookESP and name == "LiveHintBook" then
-                if v:IsA("Model") then
-                    createHighlight(v, SETTINGS.BookESPColor, "Book", "Library Book")
-                end
-            end
-
-            if SETTINGS.BreakerESP and (name == "LiveBreakerPolePickup" or name == "FuseObtain") then
-                if v:IsA("Model") then
-                    createHighlight(v, SETTINGS.BreakerESPColor, "Breaker", name == "FuseObtain" and "Generator Fuse" or "Breaker Pole")
-                end
-            end
-
-            if SETTINGS.AnchorESP and name == "MinesAnchor" then
-                if v:IsA("Model") then
-                    createHighlight(v, SETTINGS.AnchorESPColor, "Anchor", "Anchor")
-                end
-            end
-
-            if SETTINGS.CabinetESP and isCabinet(v) then
-                if v:IsA("Model") or v:IsA("BasePart") then
-                    createHighlight(v, SETTINGS.CabinetESPColor, "Cabinet", "Cabinet")
-                end
-            end
-
-            if SETTINGS.ChestESP and isChest(v) then
-                if v:IsA("Model") or v:IsA("BasePart") then
-                    createHighlight(v, SETTINGS.ChestESPColor, "Chest", "Chest")
-                end
-            end
-
-            if SETTINGS.EntityESP then
-                local function checkEntityName(ename)
-                    for k in pairs(ESP_Entities) do
-                        if ename:lower():find(k:lower()) then return true end
+                -- 物品（必须是有可交互Prompt的真实物品）
+                if SETTINGS.DoorsESP and ESP_Items[name] then
+                    if (v:IsA("BasePart") or v:IsA("Model")) and isRealPickup(v) then
+                        createHighlight(v, SETTINGS.DoorsESPColor, name, MiscPickups[name] or name, "Items")
                     end
-                    return false
                 end
-                if checkEntityName(name) then
+
+                if SETTINGS.KeyESP and (name == "KeyObtain" or name == "ElectricalKeyObtain") then
+                    if v:IsA("Model") and isRealPickup(v) then
+                        createHighlight(v, SETTINGS.KeyESPColor, "Door Key", "Door Key", "Key")
+                    end
+                end
+
+                if SETTINGS.BookESP and name == "LiveHintBook" then
+                    if v:IsA("Model") and isRealPickup(v) then
+                        createHighlight(v, SETTINGS.BookESPColor, "Book", "Library Book", "Book")
+                    end
+                end
+
+                if SETTINGS.BreakerESP and (name == "LiveBreakerPolePickup" or name == "FuseObtain") then
+                    if v:IsA("Model") and isRealPickup(v) then
+                        createHighlight(v, SETTINGS.BreakerESPColor, "Breaker", name == "FuseObtain" and "Generator Fuse" or "Breaker Pole", "Breaker")
+                    end
+                end
+
+                if SETTINGS.AnchorESP and name == "MinesAnchor" then
+                    if v:IsA("Model") then
+                        createHighlight(v, SETTINGS.AnchorESPColor, "Anchor", "Anchor", "Anchor")
+                    end
+                end
+
+                if SETTINGS.CabinetESP and isCabinet(v) then
                     if v:IsA("Model") or v:IsA("BasePart") then
-                        local hlColor = SETTINGS.EntityESPColor
-                        local shortName = EntityTable.ShortNames[name]
-                        local displayName = shortName or name
-                        createHighlight(v, hlColor, name, displayName)
+                        createHighlight(v, SETTINGS.CabinetESPColor, "Cabinet", "Cabinet", "Cabinet")
+                    end
+                end
+
+                if SETTINGS.ChestESP and isChest(v) then
+                    if v:IsA("Model") or v:IsA("BasePart") then
+                        createHighlight(v, SETTINGS.ChestESPColor, "Chest", "Chest", "Chest")
+                    end
+                end
+
+                if SETTINGS.OtherESP then
+                    if isDoor(v) and (v:IsA("Model") or v:IsA("BasePart")) then
+                        createHighlight(v, SETTINGS.OtherESPColor, "Door", "Door", "Other")
+                    end
+                    if (isLever(v) or name == "LeverForGate" or name == "TimerLever") and (v:IsA("Model") or v:IsA("BasePart")) then
+                        createHighlight(v, SETTINGS.LeverESPColor, "Lever", "Lever", "Other")
+                    end
+                    if isGold(v) and (v:IsA("Model") or v:IsA("BasePart")) then
+                        createHighlight(v, SETTINGS.GoldESPColor, "Gold", "Gold Pile", "Other")
+                    end
+                end
+
+                if SETTINGS.LeverESP and (name == "LeverForGate" or name == "TimerLever" or name == "MinesGenerator") then
+                    if v:IsA("Model") then
+                        createHighlight(v, SETTINGS.LeverESPColor, "Lever", name, "Lever")
+                    end
+                end
+
+                if SETTINGS.MinecartPathESP and isMinecartTrack(v) then
+                    if v:IsA("Model") or v:IsA("BasePart") then
+                        local pathColor = MinecartPathNodeColor[SETTINGS.MinecartPathColor] or MinecartPathNodeColor.Yellow
+                        createHighlight(v, pathColor, "MinecartPath", "Minecart", "Minecart")
                     end
                 end
             end
+        end
 
-            if SETTINGS.OtherESP then
-                if isDoor(v) and (v:IsA("Model") or v:IsA("BasePart")) then
-                    createHighlight(v, SETTINGS.OtherESPColor, "Door", "Door")
-                end
-                if (isLever(v) or name == "LeverForGate" or name == "TimerLever") and (v:IsA("Model") or v:IsA("BasePart")) then
-                    createHighlight(v, SETTINGS.LeverESPColor, "Lever", "Lever")
-                end
-                if isGold(v) and (v:IsA("Model") or v:IsA("BasePart")) then
-                    createHighlight(v, SETTINGS.GoldESPColor, "Gold", "Gold Pile")
-                end
-            end
-
-            if SETTINGS.LeverESP and (name == "LeverForGate" or name == "TimerLever" or name == "MinesGenerator") then
-                if v:IsA("Model") then
-                    createHighlight(v, SETTINGS.LeverESPColor, "Lever", name)
-                end
-            end
-
-            if SETTINGS.MinecartPathESP and isMinecartTrack(v) then
-                if v:IsA("Model") or v:IsA("BasePart") then
-                    local pathColor = MinecartPathNodeColor[SETTINGS.MinecartPathColor] or MinecartPathNodeColor.Yellow
-                    createHighlight(v, pathColor, "MinecartPath", "Minecart")
+        -- 实体 ESP：只扫描 Workspace 顶层子节点（实体是顶层 Model）
+        if SETTINGS.EntityESP then
+            for _, v in pairs(Workspace:GetChildren()) do
+                if isDestroyed then return end
+                if (v:IsA("Model") or v:IsA("BasePart")) and checkEntityName(v.Name) then
+                    local shortName = EntityTable.ShortNames[v.Name]
+                    local displayName = shortName or v.Name
+                    createHighlight(v, SETTINGS.EntityESPColor, v.Name, displayName, "Entity")
                 end
             end
         end
@@ -714,22 +821,36 @@ local function updateESP()
         if SETTINGS.PlayerESP then
             for _, plr in ipairs(Players:GetPlayers()) do
                 if plr ~= LocalPlayer and plr.Character then
-                    createHighlight(plr.Character, SETTINGS.PlayerESPColor, "Player", plr.Name)
+                    createHighlight(plr.Character, SETTINGS.PlayerESPColor, "Player", plr.Name, "Player")
                 end
             end
         end
 
-        -- 清理无效引用
-        for part, hl in pairs(espHighlights) do
-            if not part or not part.Parent then
-                pcall(function() hl:Destroy() end)
-                espHighlights[part] = nil
-            end
-        end
-        for part, bb in pairs(espBillboards) do
-            if not part or not part.Parent then
-                pcall(function() bb:Destroy() end)
-                espBillboards[part] = nil
+        -- Step 3: 清理本轮未刷新的（对象已消失或移动到扫描范围外）+ 无效引用
+        for key, entry in pairs(espHighlights) do
+            -- 如果 adornee 已不存在或本轮未刷新，则移除
+            if not key or not key.Parent or not entry.fresh then
+                -- Player 和 Entity 类型比较特殊（可能在扫描范围外但仍存在），只检查 adornee 是否有效
+                if entry.cat == "Player" or entry.cat == "Entity" then
+                    if not key or not key.Parent then
+                        pcall(function() if entry.hl then entry.hl:Destroy() end end)
+                        espHighlights[key] = nil
+                        if espBillboards[key] then
+                            pcall(function() espBillboards[key]:Destroy() end)
+                            espBillboards[key] = nil
+                        end
+                    end
+                else
+                    -- 房间内物品：未刷新说明已不在扫描范围或已消失
+                    if not entry.fresh then
+                        pcall(function() if entry.hl then entry.hl:Destroy() end end)
+                        espHighlights[key] = nil
+                        if espBillboards[key] then
+                            pcall(function() espBillboards[key]:Destroy() end)
+                            espBillboards[key] = nil
+                        end
+                    end
+                end
             end
         end
     end)
@@ -1147,6 +1268,24 @@ local function findLoot(origin)
 
     pcall(function()
         for _, loot in pairs(origin:GetChildren()) do
+            if loot:IsA("Model") or loot:IsA("BasePart") then
+                -- 处理容器：抽屉/工具箱/宝箱/储物柜的 ActivateEventPrompt
+                local containerPrompt = loot:FindFirstChild("ActivateEventPrompt", true)
+                if containerPrompt and (
+                    loot.Name == "Toolbox" or loot.Name == "ChestBox" or
+                    loot.Name:find("Drawer") or loot.Name:find("Dresser") or
+                    loot.Name == "Toolshed_Small" or loot.Name:find("Nightstand") or
+                    loot.Name == "Desk" or loot.Name:find("Cabinet") or
+                    loot.Name:find("Wardrobe") or loot.Name == "Table"
+                ) then
+                    if not containerPrompt:GetAttribute("Interactions") and containerPrompt.Enabled then
+                        local mainPart = loot:IsA("BasePart") and loot or (loot.PrimaryPart or loot:FindFirstChild("Main", true))
+                        if mainPart and (mainPart.Position - col.Position).Magnitude < containerPrompt.MaxActivationDistance * range then
+                            fireProximityPrompt(containerPrompt)
+                        end
+                    end
+                end
+            end
             if loot.Name == "GoldPile" and loot:FindFirstChild("Hitbox") and loot:FindFirstChild("LootPrompt") then
                 if (loot.Hitbox.Position - col.Position).Magnitude < loot.LootPrompt.MaxActivationDistance * range then
                     fireProximityPrompt(loot.LootPrompt)
@@ -1234,33 +1373,52 @@ local function setupAutoInteract()
             if assets then
                 findLoot(assets)
                 for _, root2 in pairs(assets:GetChildren()) do
-                    if root2.Name == "Locker_Small" and root2:FindFirstChild("Door") and root2.Door:FindFirstChild("ActivateEventPrompt") then
+                    if not (root2:IsA("Model") or root2:IsA("BasePart")) then
+                        continue
+                    end
+                    local rootName = root2.Name
+                    local rootLName = rootName:lower()
+                    -- 通用容器检测：匹配所有可能的抽屉/柜子/宝箱/工具箱类
+                    local isAnyContainer = rootLName:find("drawer") or rootLName:find("dresser")
+                        or rootLName:find("nightstand") or rootLName:find("desk")
+                        or rootLName:find("table") or rootLName:find("cabinet")
+                        or rootLName:find("wardrobe") or rootLName:find("toolshed")
+                        or rootLName:find("chest") or rootLName:find("toolbox")
+                        or rootLName:find("locker") or rootLName:find("closet")
+
+                    if (rootName == "Locker_Small") and root2:FindFirstChild("Door") and root2.Door:FindFirstChild("ActivateEventPrompt") then
                         if not root2.Door.ActivateEventPrompt:GetAttribute("Interactions") then
                             if (root2.Door.Position - col.Position).Magnitude < root2.Door.ActivateEventPrompt.MaxActivationDistance * range then
                                 fireProximityPrompt(root2.Door.ActivateEventPrompt)
                             end
                         end
-                    elseif (root2.Name == "Toolbox" or root2.Name == "ChestBox" or root2.Name == "Toolshed_Small") and root2:FindFirstChild("ActivateEventPrompt") then
+                    elseif isAnyContainer then
+                        -- 任何容器类型：找到 ActivateEventPrompt 就尝试触发
+                        local anyPrompt = root2:FindFirstChild("ActivateEventPrompt", true)
+                        if anyPrompt and not anyPrompt:GetAttribute("Interactions") and anyPrompt.Enabled then
+                            local mainPart = root2:IsA("BasePart") and root2
+                                or (root2.PrimaryPart or root2:FindFirstChild("Main", true) or root2:FindFirstChild("Door", true))
+                            if mainPart and mainPart:IsA("BasePart") then
+                                if (mainPart.Position - col.Position).Magnitude < anyPrompt.MaxActivationDistance * range then
+                                    fireProximityPrompt(anyPrompt)
+                                end
+                            end
+                        end
+                    elseif rootName == "LeverForGate" and root2:FindFirstChild("ActivateEventPrompt") then
                         if not root2.ActivateEventPrompt:GetAttribute("Interactions") then
                             if (root2.Main.Position - col.Position).Magnitude < root2.ActivateEventPrompt.MaxActivationDistance * range then
                                 fireProximityPrompt(root2.ActivateEventPrompt)
                             end
                         end
-                    elseif root2.Name == "LeverForGate" and root2:FindFirstChild("ActivateEventPrompt") then
-                        if not root2.ActivateEventPrompt:GetAttribute("Interactions") then
-                            if (root2.Main.Position - col.Position).Magnitude < root2.ActivateEventPrompt.MaxActivationDistance * range then
-                                fireProximityPrompt(root2.ActivateEventPrompt)
-                            end
-                        end
-                    elseif root2.Name == "VentGrate" and root2:FindFirstChild("AwesomePrompt") then
+                    elseif rootName == "VentGrate" and root2:FindFirstChild("AwesomePrompt") then
                         if root2.AwesomePrompt.Enabled and (root2.SquareGrate.Position - col.Position).Magnitude < root2.AwesomePrompt.MaxActivationDistance * range then
                             fireProximityPrompt(root2.AwesomePrompt)
                         end
-                    elseif root2.Name == "Modular_Bookshelf" and root2:FindFirstChild("LiveHintBook") then
+                    elseif rootName == "Modular_Bookshelf" and root2:FindFirstChild("LiveHintBook") then
                         if (root2.LiveHintBook.Base.Position - col.Position).Magnitude < root2.LiveHintBook.ActivateEventPrompt.MaxActivationDistance * range then
                             fireProximityPrompt(root2.LiveHintBook.ActivateEventPrompt)
                         end
-                    elseif root2.Name == "MinesGenerator" then
+                    elseif rootName == "MinesGenerator" then
                         local fuse = hasItem("GeneratorFuse")
                         if fuse and root2:FindFirstChild("Fuses") then
                             for _, fi in pairs(root2.Fuses:GetChildren()) do
@@ -1272,7 +1430,7 @@ local function setupAutoInteract()
                                 end
                             end
                         end
-                    elseif root2.Name == "MinesGateButton" and root2:FindFirstChild("Button") and root2:FindFirstChild("Light") then
+                    elseif rootName == "MinesGateButton" and root2:FindFirstChild("Button") and root2:FindFirstChild("Light") then
                         if root2.Light.Transparency < 1 then
                             if (root2.Button.Position - col.Position).Magnitude < root2.Button.ActivateEventPrompt.MaxActivationDistance * range then
                                 fireProximityPrompt(root2.Button.ActivateEventPrompt)
@@ -1586,22 +1744,45 @@ local function updateSpeed()
     if isDestroyed then return end
     local hum = getHumanoid()
     if hum then
-        hum.WalkSpeed = 17 + SETTINGS.SpeedBoost
+        -- SpeedBoost 默认=0时保持游戏默认 WalkSpeed（不额外加速）
+        hum.WalkSpeed = 16 + SETTINGS.SpeedBoost
+        -- JumpPower 默认=50时也保持游戏默认
         hum.JumpPower = SETTINGS.JumpPower
     end
 end
+
+-- 保存角色原始 CanCollide 状态
+local originalCanCollide = {}
 
 local function setupNoclip()
     local conn
     conn = RunService.Stepped:Connect(function()
         if isDestroyed then return end
-        if not (SETTINGS.Noclip or (SETTINGS.InteractNoclip and SETTINGS.InstantInteract)) then return end
+        local shouldNoclip = SETTINGS.Noclip or (SETTINGS.InteractNoclip and SETTINGS.InstantInteract)
         local char = getChar()
         if not char then return end
-        for _, v in pairs(char:GetDescendants()) do
-            if v:IsA("BasePart") and v.Name ~= "HumanoidRootPart" then
-                v.CanCollide = false
+
+        if shouldNoclip then
+            -- 开启穿墙：保存原始状态后设置为 false
+            for _, v in pairs(char:GetDescendants()) do
+                if v:IsA("BasePart") and v.Name ~= "HumanoidRootPart" then
+                    if originalCanCollide[v] == nil then
+                        originalCanCollide[v] = v.CanCollide
+                    end
+                    v.CanCollide = false
+                end
             end
+        else
+            -- 关闭穿墙：恢复所有保存的原始 CanCollide
+            for part, origState in pairs(originalCanCollide) do
+                if part and part.Parent then
+                    pcall(function() part.CanCollide = origState end)
+                end
+            end
+            originalCanCollide = {}
+            -- 对于 HumanoidRootPart，确保它始终有碰撞
+            local hrp = char:FindFirstChild("HumanoidRootPart")
+            if hrp then hrp.CanCollide = true end
         end
     end)
     table.insert(connections, conn)
@@ -1750,13 +1931,22 @@ end
 -- 22. Visuals / Audio
 -- ══════════════════════════════════════════════════════════════════
 local function setupVisuals()
+    -- 在 RenderStepped 中设置 FOV（在游戏修改后、渲染前执行，优先级更高）
     local conn
-    conn = RunService.Heartbeat:Connect(function()
+    conn = RunService.RenderStepped:Connect(function()
         if isDestroyed then return end
         pcall(function()
-            -- FieldOfView
+            -- FieldOfView：非0时强制覆盖，0时恢复默认
             if SETTINGS.FieldOfView > 0 then
+                if oldFOV == nil then
+                    oldFOV = Camera.FieldOfView
+                end
                 Camera.FieldOfView = SETTINGS.FieldOfView
+            else
+                if oldFOV ~= nil then
+                    -- 用户关闭了FOV自定义，恢复原始值
+                    Camera.FieldOfView = oldFOV
+                end
             end
             -- NoAcceleration
             local char = getChar()
@@ -1853,11 +2043,29 @@ local function destroyScript()
     clearESP()
     if Window then pcall(function() Window:Destroy() end) end
     if _G.QuantumUI_Window then _G.QuantumUI_Window = nil end
-    -- 恢复光照
+    -- 恢复光照/FOV
     pcall(function()
         Lighting.GlobalShadows = true
         Lighting.OutdoorAmbient = Color3.new(0, 0, 0)
         Lighting.FogEnd = oldFogEnd
+        -- 恢复原始FOV
+        if oldFOV ~= nil then
+            Camera.FieldOfView = oldFOV
+        end
+    end)
+    -- 恢复角色碰撞
+    pcall(function()
+        local char = getChar()
+        if char then
+            for part, origState in pairs(originalCanCollide) do
+                if part and part.Parent then
+                    pcall(function() part.CanCollide = origState end)
+                end
+            end
+            originalCanCollide = {}
+            local hrp = char:FindFirstChild("HumanoidRootPart")
+            if hrp then hrp.CanCollide = true end
+        end
     end)
     pcall(function() StarterGui:SetCore("SendNotification", {
         Title = "销毁", Text = "脚本已彻底销毁", Duration = 2
@@ -1869,8 +2077,8 @@ end
 -- 24. 构建 Quantum UI 界面
 -- ══════════════════════════════════════════════════════════════════
 Window = QuantumUI.new({
-    Title = "Doors 辅助 v3.0",
-    Subtitle = "QuantumUI - LXv3 Port",
+    Title = "Doors 辅助 v3.1",
+    Subtitle = "QuantumUI - v3.1 Bugfix",
     ThemeColor = Color3.fromRGB(255, 150, 200),
     Transparency = 0.3,
     Size = UDim2.new(0, 720, 0, 580),
@@ -1892,8 +2100,11 @@ ESPTab:AddToggle({
     Flag = "ESP_Enabled",
     Callback = function(val)
         SETTINGS.ESPEnabled = val
-        if val then SETTINGS.DoorsESP = true end
-        notify("ESP", val and "已启用" or "已禁用", 2, val and "Success" or "Warning")
+        if not val then
+            -- 关闭主开关时清除所有 ESP 标注
+            clearESP()
+        end
+        notify("ESP", val and "已启用" or "已禁用 (所有标注已清除)", 2, val and "Success" or "Warning")
     end
 })
 
@@ -1901,7 +2112,13 @@ ESPTab:AddToggle({
     Name = "显示名称",
     Default = SETTINGS.ESPName,
     Flag = "ESP_Name",
-    Callback = function(val) SETTINGS.ESPName = val end
+    Callback = function(val)
+        SETTINGS.ESPName = val
+        -- 立即更新所有 billboard 可见性
+        for _, bb in pairs(espBillboards) do
+            pcall(function() bb.Enabled = val end)
+        end
+    end
 })
 
 ESPTab:AddSection({ Name = "📦 物品分类 ESP" })
@@ -1910,77 +2127,110 @@ ESPTab:AddToggle({
     Name = "物品 ESP (Key/Book/...)",
     Default = SETTINGS.DoorsESP,
     Flag = "ESP_Items",
-    Callback = function(val) SETTINGS.DoorsESP = val end
+    Callback = function(val)
+        SETTINGS.DoorsESP = val
+        if not val then removeESPByCategory("Items") end
+    end
 })
 
 ESPTab:AddToggle({
     Name = "钥匙 ESP (KeyObtain)",
     Default = SETTINGS.KeyESP,
     Flag = "ESP_Key",
-    Callback = function(val) SETTINGS.KeyESP = val end
+    Callback = function(val)
+        SETTINGS.KeyESP = val
+        if not val then removeESPByCategory("Key") end
+    end
 })
 
 ESPTab:AddToggle({
     Name = "书本 ESP (Library Book)",
     Default = SETTINGS.BookESP,
     Flag = "ESP_Book",
-    Callback = function(val) SETTINGS.BookESP = val end
+    Callback = function(val)
+        SETTINGS.BookESP = val
+        if not val then removeESPByCategory("Book") end
+    end
 })
 
 ESPTab:AddToggle({
     Name = "断路器/保险丝 ESP",
     Default = SETTINGS.BreakerESP,
     Flag = "ESP_Breaker",
-    Callback = function(val) SETTINGS.BreakerESP = val end
+    Callback = function(val)
+        SETTINGS.BreakerESP = val
+        if not val then removeESPByCategory("Breaker") end
+    end
 })
 
 ESPTab:AddToggle({
     Name = "锚点 ESP (Anchor)",
     Default = SETTINGS.AnchorESP,
     Flag = "ESP_Anchor",
-    Callback = function(val) SETTINGS.AnchorESP = val end
+    Callback = function(val)
+        SETTINGS.AnchorESP = val
+        if not val then removeESPByCategory("Anchor") end
+    end
 })
 
 ESPTab:AddToggle({
     Name = "拉杆 ESP (Lever/Generator)",
     Default = SETTINGS.LeverESP,
     Flag = "ESP_Lever",
-    Callback = function(val) SETTINGS.LeverESP = val end
+    Callback = function(val)
+        SETTINGS.LeverESP = val
+        if not val then removeESPByCategory("Lever") end
+    end
 })
 
 ESPTab:AddToggle({
     Name = "柜子 ESP (Cabinet)",
     Default = SETTINGS.CabinetESP,
     Flag = "ESP_Cabinet",
-    Callback = function(val) SETTINGS.CabinetESP = val end
+    Callback = function(val)
+        SETTINGS.CabinetESP = val
+        if not val then removeESPByCategory("Cabinet") end
+    end
 })
 
 ESPTab:AddToggle({
     Name = "宝箱 ESP (Chest)",
     Default = SETTINGS.ChestESP,
     Flag = "ESP_Chest",
-    Callback = function(val) SETTINGS.ChestESP = val end
+    Callback = function(val)
+        SETTINGS.ChestESP = val
+        if not val then removeESPByCategory("Chest") end
+    end
 })
 
 ESPTab:AddToggle({
     Name = "实体 ESP (Entity)",
     Default = SETTINGS.EntityESP,
     Flag = "ESP_Entity",
-    Callback = function(val) SETTINGS.EntityESP = val end
+    Callback = function(val)
+        SETTINGS.EntityESP = val
+        if not val then removeESPByCategory("Entity") end
+    end
 })
 
 ESPTab:AddToggle({
     Name = "其他 ESP (Door/Lever/Gold)",
     Default = SETTINGS.OtherESP,
     Flag = "ESP_Other",
-    Callback = function(val) SETTINGS.OtherESP = val end
+    Callback = function(val)
+        SETTINGS.OtherESP = val
+        if not val then removeESPByCategory("Other") end
+    end
 })
 
 ESPTab:AddToggle({
     Name = "玩家 ESP (Player)",
     Default = SETTINGS.PlayerESP,
     Flag = "ESP_Player",
-    Callback = function(val) SETTINGS.PlayerESP = val end
+    Callback = function(val)
+        SETTINGS.PlayerESP = val
+        if not val then removeESPByCategory("Player") end
+    end
 })
 
 ESPTab:AddSection({ Name = "⛏️ 矿井车路径 ESP" })
@@ -1989,7 +2239,10 @@ ESPTab:AddToggle({
     Name = "Minecart Path ESP",
     Default = SETTINGS.MinecartPathESP,
     Flag = "ESP_MinecartPath",
-    Callback = function(val) SETTINGS.MinecartPathESP = val end
+    Callback = function(val)
+        SETTINGS.MinecartPathESP = val
+        if not val then removeESPByCategory("Minecart") end
+    end
 })
 
 ESPTab:AddDropdown({
@@ -3035,8 +3288,15 @@ MiscTab:AddParagraph({
 MiscTab:AddSection({ Name = "📖 About" })
 
 MiscTab:AddParagraph({
-    Title = "Doors 辅助 v3.0 Features",
+    Title = "Doors 辅助 v3.1 Features",
     Content = table.concat({
+        "🐛 v3.1 Bugfixes:",
+        "  - ESP: 仅标注真实可拾取物品(去装饰)",
+        "  - AutoInteract: 自动打开抽屉/柜子/梳妆台",
+        "  - Movement: 默认无加速(Speed=0)",
+        "  - Noclip: 关闭后自动恢复碰撞",
+        "  - FOV: RenderStepped强制生效/可还原",
+        "",
         "✨ ESP 系统:",
         "  - Door/Key/Lever/Item/Book/Breaker",
         "  - Anchor/Entity/Cabinet/Chest/Gold/Player",
@@ -3191,17 +3451,22 @@ table.insert(connections, inputEndedConn)
 -- 27. 加载完成通知
 -- ══════════════════════════════════════════════════════════════════
 task.wait(0.3)
-notify("✅ Doors 辅助 v3.0 加载完成!",
-    "QuantumUI 版本 v3.0\n" ..
-    "基于 LX Doors v3 完整重写\n" ..
+notify("✅ Doors 辅助 v3.1 加载完成!",
+    "QuantumUI 版本 v3.1 (Bugfix)\n" ..
+    "修复: ESP去装饰/抽屉自动开/默认无加速/Noclip还原/FOV生效\n" ..
     "按 " .. tostring(SETTINGS.UIKeybind.Name) .. " 切换 UI 显示\n" ..
     "支持楼层: Hotel/Mines/Rooms/Backdoor/Fools/Retro\n" ..
     "PlaceId: 6839808510 / 7894711641",
     6, "Success")
 
 print("========================================")
-print(" Doors 辅助 v3.0 (QuantumUI) 加载完成")
+print(" Doors 辅助 v3.1 (QuantumUI) 加载完成 - Bugfix版")
 print("   基于 LX Doors v3 (LOLHAX) 完整移植")
+print("   🐛 ESP仅真实可拾取物品(过滤装饰)")
+print("   🐛 AutoInteract抽屉/柜子自动打开")
+print("   🐛 默认无加速 SpeedBoost=0, JumpPower=50")
+print("   🐛 Noclip关闭后自动恢复碰撞")
+print("   🐛 FOV使用RenderStepped强制生效")
 print("   UI切换    - " .. tostring(SETTINGS.UIKeybind.Name))
 print("   穿墙      - " .. tostring(SETTINGS.NoclipKeybind.Name))
 print("   飞行      - " .. tostring(SETTINGS.FlyKeybind.Name))

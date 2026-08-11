@@ -1,7 +1,7 @@
 --[[
     ╔══════════════════════════════════════════════════════════════════╗
     ║                         LOG-HUB 脚本中心                          ║
-    ║                      Version 1.8.0                               ║
+    ║                      Version 1.9.0                               ║
     ║                         Created by log_quick                     ║
     ║                                                                  ║
     ║  功能：                                                          ║
@@ -63,7 +63,7 @@ local GAME_REGISTRY = {
         Name = "Doors (恐怖门)",
         PlaceIds = { 6839179744, 6839808510, 7894711641, 7542019739, 7951135890, 8114357705 },
         ScriptPath = "/Doors_QuantumUI.lua",
-        Description = "Doors v3.0 (LX Doors v3 源码): 全ESP + 自动交互/躲藏/密码锁 + 8项反实体 + 7项移除 + 3项绕过 + 实体通知 + 矿车/锚点 + 全楼层(Hotel/Mines/Rooms/Backdoor/Fools) + 移动增强",
+        Description = "Doors v3.1 修复版: ESP过滤(仅真实物品/无装饰) + 抽屉自动打开 + 默认无加速 + Noclip恢复碰撞 + FOV修复 + 全ESP/自动交互躲藏/反实体/矿车/锚点/全楼层",
     },
     -- 未来扩展:
     -- {
@@ -216,7 +216,7 @@ local function loadGenericScript()
 
     local Window = QuantumUI.new({
         Title    = "通用模式 - " .. GameName,
-        Subtitle = "PlaceId: " .. tostring(PlaceId) .. "  |  Log-Hub v1.6.0",
+        Subtitle = "PlaceId: " .. tostring(PlaceId) .. "  |  Log-Hub v1.9.0",
         ThemeColor = Color3.fromRGB(0, 200, 255),
         Transparency = 0.3,
         Size     = UDim2.new(0, 560, 0, 440),
