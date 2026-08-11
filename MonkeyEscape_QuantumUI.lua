@@ -1,10 +1,10 @@
 --[[
-    Active +1 Speed Monkey Escape 辅助脚本 v1.0 (Quantum UI 版)
+    +1 Speed Monkey Escape Codes 辅助脚本 v1.2 (Quantum UI 版)
     适配 PlaceId: 1169737442 (Main) / 10144280947 (Universe)
-    功能: 奖励点位传送 (世界一 1win~200Kwins / 世界二 1Mwins~1Twins) / 世界切换 / 移动修改 / AntiAFK
+    功能: 奖励点位传送 / 世界切换 / 锁定循环传送(防拉回) / 自动切换奖励点 / 移动修改 / AntiAFK
     快捷键:
         RightShift - 隐藏/显示 UI
-        T          - 传送到下一奖励点 (循环)
+        T          - 世界一手动下一点
         Y          - 传送到世界二
         U          - 传送到世界一
     安全承诺: 不采集任何信息，不 loadstring 外部功能代码，所有逻辑本地实现。
@@ -111,6 +111,18 @@ local SETTINGS = {
     ME_Fly = false,
     ME_FlySpeed = 80,
 
+    -- Locked Loop Teleport (anti-pushback, same point repeatedly)
+    ME_W1LockLoopEnabled = false,
+    ME_W1LockLoopInterval = 0.5,
+    ME_W2LockLoopEnabled = false,
+    ME_W2LockLoopInterval = 0.5,
+
+    -- Auto Cycle Teleport (cycle through points one by one)
+    ME_W1AutoCycleEnabled = false,
+    ME_W1AutoCycleInterval = 1.0,
+    ME_W2AutoCycleEnabled = false,
+    ME_W2AutoCycleInterval = 1.0,
+
     -- Misc
     ME_AntiAFK = false,
 }
@@ -128,7 +140,19 @@ local flyBG = nil
 local antiAFKConn = nil
 
 local currentWorld = 1
-local currentPointIndex = 1
+local w1Index = 1
+local w2Index = 1
+
+-- 使用 generation counter 代替简单 boolean，修复快速开关后无法重启的 bug
+local w1LockGen = 0     -- 世界一锁定循环代数
+local w2LockGen = 0     -- 世界二锁定循环代数
+local w1CycleGen = 0    -- 世界一自动切换循环代数
+local w2CycleGen = 0    -- 世界二自动切换循环代数
+
+local warnLock1 = { value = 0 }
+local warnLock2 = { value = 0 }
+local warnCycle1 = { value = 0 }
+local warnCycle2 = { value = 0 }
 
 -- ══════════════════════════════════════════════════════════════════
 -- 6. 通知辅助函数
@@ -210,8 +234,8 @@ local function fireTeleportWorld(worldId)
         return false
     end
     currentWorld = worldId
-    local points = getPoints(worldId)
-    currentPointIndex = 1
+    w1Index = 1
+    w2Index = 1
     notify("世界切换", "已请求传送到世界 " .. worldId, 3, "Success")
     return true
 end
@@ -340,15 +364,15 @@ end
 -- ══════════════════════════════════════════════════════════════════
 -- 9. 创建 UI
 -- ══════════════════════════════════════════════════════════════════
-local GameName = "Active +1 Speed Monkey Escape"
+local GameName = "+1 Speed Monkey Escape Codes"
 local PlaceId   = game.PlaceId
 
 Window = QuantumUI.new({
     Title    = "Monkey Escape",
-    Subtitle = "Active +1 Speed Monkey Escape",
+    Subtitle = "+1 Speed Monkey Escape Codes",
     ThemeColor = Color3.fromRGB(255, 140, 40),
     Transparency = 0.3,
-    Size     = UDim2.new(0, 580, 0, 460),
+    Size     = UDim2.new(0, 640, 0, 540),
     Keybind  = Enum.KeyCode.RightShift,
 })
 
@@ -419,16 +443,141 @@ TP_Tab:AddButton({
 })
 
 TP_Tab:AddButton({
-    Name = "⏭️ 传送到下一奖励点 (循环)",
+    Name = "⏭️ 手动下一点",
     Callback = function()
-        currentPointIndex = currentPointIndex + 1
-        if currentPointIndex > #WORLD1_POINTS then
-            currentPointIndex = 1
+        w1Index = w1Index + 1
+        if w1Index > #WORLD1_POINTS then
+            w1Index = 1
         end
-        local p = WORLD1_POINTS[currentPointIndex]
+        local p = WORLD1_POINTS[w1Index]
         w1Dropdown:Set(p.Name)
         if teleportTo(p.Pos) then
             notify("传送", "世界一 → " .. p.Name, 2, "Info")
+        end
+    end,
+})
+
+TP_Tab:AddSection({ Name = "世界一 · 锁定循环传送 (防拉回)" })
+
+TP_Tab:AddParagraph({
+    Title   = "说明",
+    Content = "反复传送到当前选中的同一个奖励点，防止被游戏拉回原位。\n先在上方选择奖励点，再启用开关。",
+})
+
+TP_Tab:AddSlider({
+    Name      = "传送间隔 (秒)",
+    Min       = 0.05, Max = 5, Default = 0.5, Increment = 0.05,
+    Suffix    = "s",
+    Flag      = "ME_W1LockLoopInterval",
+    Callback  = function(v)
+        SETTINGS.ME_W1LockLoopInterval = v
+    end,
+})
+
+TP_Tab:AddToggle({
+    Name     = "启用锁定循环传送",
+    Default  = false,
+    Flag     = "ME_W1LockLoopEnabled",
+    Callback = function(enabled)
+        SETTINGS.ME_W1LockLoopEnabled = enabled
+        if enabled then
+            w1LockGen = w1LockGen + 1
+            local myGen = w1LockGen
+            task.spawn(function()
+                warnLock1.value = 0
+                while SETTINGS.ME_W1LockLoopEnabled and w1LockGen == myGen and not isDestroyed do
+                    local sel = w1Dropdown:Get()
+                    local targetPos = nil
+                    if sel then
+                        for _, p in ipairs(WORLD1_POINTS) do
+                            if p.Name == sel then
+                                targetPos = p.Pos
+                                break
+                            end
+                        end
+                    end
+                    if targetPos then
+                        local ok, err = pcall(function()
+                            teleportTo(targetPos)
+                        end)
+                        if (not ok) and warnLock1.value % 20 == 0 then
+                            notify("世界一锁定", "警告: " .. tostring(err or "未知错误"), 2, "Error")
+                            warnLock1.value = 1
+                        else
+                            warnLock1.value = warnLock1.value + 1
+                        end
+                    else
+                        warnLock1.value = warnLock1.value + 1
+                        if warnLock1.value == 1 or warnLock1.value % 30 == 0 then
+                            notify("世界一锁定", "请先选择一个奖励点", 2, "Warning")
+                        end
+                    end
+                    local delay = tonumber(SETTINGS.ME_W1LockLoopInterval) or 0.5
+                    if delay < 0.05 then delay = 0.05 end
+                    task.wait(delay)
+                end
+            end)
+            notify("世界一锁定", "已启动，间隔 " .. tostring(SETTINGS.ME_W1LockLoopInterval) .. "s", 2, "Success")
+        else
+            w1LockGen = w1LockGen + 1
+            notify("世界一锁定", "已停止", 1.5, "Info")
+        end
+    end,
+})
+
+TP_Tab:AddSection({ Name = "世界一 · 自动切换奖励点" })
+
+TP_Tab:AddParagraph({
+    Title   = "说明",
+    Content = "按顺序自动切换 1 Wins → 5 Wins → 20 Wins → ... → 200K Wins → 回到开头。",
+})
+
+TP_Tab:AddSlider({
+    Name      = "切换间隔 (秒)",
+    Min       = 0.1, Max = 10, Default = 1.0, Increment = 0.1,
+    Suffix    = "s",
+    Flag      = "ME_W1AutoCycleInterval",
+    Callback  = function(v)
+        SETTINGS.ME_W1AutoCycleInterval = v
+    end,
+})
+
+TP_Tab:AddToggle({
+    Name     = "启用自动切换",
+    Default  = false,
+    Flag     = "ME_W1AutoCycleEnabled",
+    Callback = function(enabled)
+        SETTINGS.ME_W1AutoCycleEnabled = enabled
+        if enabled then
+            w1CycleGen = w1CycleGen + 1
+            local myGen = w1CycleGen
+            task.spawn(function()
+                warnCycle1.value = 0
+                while SETTINGS.ME_W1AutoCycleEnabled and w1CycleGen == myGen and not isDestroyed do
+                    w1Index = w1Index + 1
+                    if w1Index > #WORLD1_POINTS then
+                        w1Index = 1
+                    end
+                    local p = WORLD1_POINTS[w1Index]
+                    w1Dropdown:Set(p.Name)
+                    local ok, err = pcall(function()
+                        teleportTo(p.Pos)
+                    end)
+                    if (not ok) and warnCycle1.value % 20 == 0 then
+                        notify("世界一切换", "警告: " .. tostring(err or "未知错误"), 2, "Error")
+                        warnCycle1.value = 1
+                    else
+                        warnCycle1.value = warnCycle1.value + 1
+                    end
+                    local delay = tonumber(SETTINGS.ME_W1AutoCycleInterval) or 1.0
+                    if delay < 0.1 then delay = 0.1 end
+                    task.wait(delay)
+                end
+            end)
+            notify("世界一切换", "已启动，间隔 " .. tostring(SETTINGS.ME_W1AutoCycleInterval) .. "s", 2, "Success")
+        else
+            w1CycleGen = w1CycleGen + 1
+            notify("世界一切换", "已停止", 1.5, "Info")
         end
     end,
 })
@@ -469,16 +618,141 @@ TP_Tab:AddButton({
 })
 
 TP_Tab:AddButton({
-    Name = "⏭️ 传送到下一奖励点 (循环)",
+    Name = "⏭️ 手动下一点",
     Callback = function()
-        currentPointIndex = currentPointIndex + 1
-        if currentPointIndex > #WORLD2_POINTS then
-            currentPointIndex = 1
+        w2Index = w2Index + 1
+        if w2Index > #WORLD2_POINTS then
+            w2Index = 1
         end
-        local p = WORLD2_POINTS[currentPointIndex]
+        local p = WORLD2_POINTS[w2Index]
         w2Dropdown:Set(p.Name)
         if teleportTo(p.Pos) then
             notify("传送", "世界二 → " .. p.Name, 2, "Info")
+        end
+    end,
+})
+
+TP_Tab:AddSection({ Name = "世界二 · 锁定循环传送 (防拉回)" })
+
+TP_Tab:AddParagraph({
+    Title   = "说明",
+    Content = "反复传送到当前选中的同一个奖励点，防止被游戏拉回原位。\n先在上方选择奖励点，再启用开关。",
+})
+
+TP_Tab:AddSlider({
+    Name      = "传送间隔 (秒)",
+    Min       = 0.05, Max = 5, Default = 0.5, Increment = 0.05,
+    Suffix    = "s",
+    Flag      = "ME_W2LockLoopInterval",
+    Callback  = function(v)
+        SETTINGS.ME_W2LockLoopInterval = v
+    end,
+})
+
+TP_Tab:AddToggle({
+    Name     = "启用锁定循环传送",
+    Default  = false,
+    Flag     = "ME_W2LockLoopEnabled",
+    Callback = function(enabled)
+        SETTINGS.ME_W2LockLoopEnabled = enabled
+        if enabled then
+            w2LockGen = w2LockGen + 1
+            local myGen = w2LockGen
+            task.spawn(function()
+                warnLock2.value = 0
+                while SETTINGS.ME_W2LockLoopEnabled and w2LockGen == myGen and not isDestroyed do
+                    local sel = w2Dropdown:Get()
+                    local targetPos = nil
+                    if sel then
+                        for _, p in ipairs(WORLD2_POINTS) do
+                            if p.Name == sel then
+                                targetPos = p.Pos
+                                break
+                            end
+                        end
+                    end
+                    if targetPos then
+                        local ok, err = pcall(function()
+                            teleportTo(targetPos)
+                        end)
+                        if (not ok) and warnLock2.value % 20 == 0 then
+                            notify("世界二锁定", "警告: " .. tostring(err or "未知错误"), 2, "Error")
+                            warnLock2.value = 1
+                        else
+                            warnLock2.value = warnLock2.value + 1
+                        end
+                    else
+                        warnLock2.value = warnLock2.value + 1
+                        if warnLock2.value == 1 or warnLock2.value % 30 == 0 then
+                            notify("世界二锁定", "请先选择一个奖励点", 2, "Warning")
+                        end
+                    end
+                    local delay = tonumber(SETTINGS.ME_W2LockLoopInterval) or 0.5
+                    if delay < 0.05 then delay = 0.05 end
+                    task.wait(delay)
+                end
+            end)
+            notify("世界二锁定", "已启动，间隔 " .. tostring(SETTINGS.ME_W2LockLoopInterval) .. "s", 2, "Success")
+        else
+            w2LockGen = w2LockGen + 1
+            notify("世界二锁定", "已停止", 1.5, "Info")
+        end
+    end,
+})
+
+TP_Tab:AddSection({ Name = "世界二 · 自动切换奖励点" })
+
+TP_Tab:AddParagraph({
+    Title   = "说明",
+    Content = "按顺序自动切换 1M Wins → 5M Wins → 25M Wins → ... → 1T Wins → 回到开头。",
+})
+
+TP_Tab:AddSlider({
+    Name      = "切换间隔 (秒)",
+    Min       = 0.1, Max = 10, Default = 1.0, Increment = 0.1,
+    Suffix    = "s",
+    Flag      = "ME_W2AutoCycleInterval",
+    Callback  = function(v)
+        SETTINGS.ME_W2AutoCycleInterval = v
+    end,
+})
+
+TP_Tab:AddToggle({
+    Name     = "启用自动切换",
+    Default  = false,
+    Flag     = "ME_W2AutoCycleEnabled",
+    Callback = function(enabled)
+        SETTINGS.ME_W2AutoCycleEnabled = enabled
+        if enabled then
+            w2CycleGen = w2CycleGen + 1
+            local myGen = w2CycleGen
+            task.spawn(function()
+                warnCycle2.value = 0
+                while SETTINGS.ME_W2AutoCycleEnabled and w2CycleGen == myGen and not isDestroyed do
+                    w2Index = w2Index + 1
+                    if w2Index > #WORLD2_POINTS then
+                        w2Index = 1
+                    end
+                    local p = WORLD2_POINTS[w2Index]
+                    w2Dropdown:Set(p.Name)
+                    local ok, err = pcall(function()
+                        teleportTo(p.Pos)
+                    end)
+                    if (not ok) and warnCycle2.value % 20 == 0 then
+                        notify("世界二切换", "警告: " .. tostring(err or "未知错误"), 2, "Error")
+                        warnCycle2.value = 1
+                    else
+                        warnCycle2.value = warnCycle2.value + 1
+                    end
+                    local delay = tonumber(SETTINGS.ME_W2AutoCycleInterval) or 1.0
+                    if delay < 0.1 then delay = 0.1 end
+                    task.wait(delay)
+                end
+            end)
+            notify("世界二切换", "已启动，间隔 " .. tostring(SETTINGS.ME_W2AutoCycleInterval) .. "s", 2, "Success")
+        else
+            w2CycleGen = w2CycleGen + 1
+            notify("世界二切换", "已停止", 1.5, "Info")
         end
     end,
 })
@@ -637,37 +911,41 @@ MiscTab:AddButton({
 MiscTab:AddSection({ Name = "信息" })
 
 MiscTab:AddParagraph({
-    Title   = "Monkey Escape 辅助 v1.0",
+    Title   = "Monkey Escape 辅助 v1.2",
     Content = table.concat({
-        "游戏: Active +1 Speed Monkey Escape",
+        "游戏: +1 Speed Monkey Escape Codes",
         "PlaceId: " .. tostring(PlaceId),
         "",
         "功能列表:",
         "• 奖励点位传送 (世界一 1win~200Kwins)",
         "• 奖励点位传送 (世界二 1Mwins~1Twins)",
         "• 世界切换 (World 1 / World 2)",
+        "• 锁定循环传送 (防拉回,反复传送到同一点)",
+        "• 自动切换奖励点 (按顺序逐个切换)",
         "• 移动修改 (WalkSpeed/JumpPower/InfJump/NoClip/Fly)",
         "• Anti-AFK",
         "",
         "快捷键:",
         "  RightShift - 隐藏/显示 UI",
-        "  T - 世界一循环下一点",
+        "  T - 世界一手动下一点",
         "  Y - 传送到世界二",
         "  U - 传送到世界一",
         "",
         "注意: 传送需解锁对应世界",
         "      点位传送为本地坐标瞬移",
         "      世界切换使用 RemoteEvent",
+        "      锁定传送建议间隔 0.3s~1s",
+        "      自动切换建议间隔 1s~3s",
     }, "\n"),
 })
 
 -- ── 快捷键绑定 ──
 local keybinds = {
     [Enum.KeyCode.T] = function()
-        local nextIdx = currentPointIndex + 1
+        local nextIdx = w1Index + 1
         if nextIdx > #WORLD1_POINTS then nextIdx = 1 end
-        currentPointIndex = nextIdx
-        local p = WORLD1_POINTS[currentPointIndex]
+        w1Index = nextIdx
+        local p = WORLD1_POINTS[w1Index]
         w1Dropdown:Set(p.Name)
         teleportTo(p.Pos)
         notify("T 快捷键", "→ " .. p.Name, 1.5, "Info")
@@ -712,6 +990,14 @@ local function cleanup()
     SETTINGS.ME_NoClip = false
     SETTINGS.ME_Fly = false
     SETTINGS.ME_AntiAFK = false
+    SETTINGS.ME_W1LockLoopEnabled = false
+    SETTINGS.ME_W2LockLoopEnabled = false
+    SETTINGS.ME_W1AutoCycleEnabled = false
+    SETTINGS.ME_W2AutoCycleEnabled = false
+    w1LockGen = w1LockGen + 1
+    w2LockGen = w2LockGen + 1
+    w1CycleGen = w1CycleGen + 1
+    w2CycleGen = w2CycleGen + 1
 
     setWalkSpeed(false, 16)
     setJumpPower(false, 50)
@@ -734,6 +1020,6 @@ _G.MonkeyEscape_Cleanup = cleanup
 
 -- ── 完成通知 ──
 task.wait(0.5)
-notify("Monkey Escape v1.0", "Active +1 Speed Monkey Escape 辅助已加载\n按 RightShift 打开 UI", 5, "Success")
+notify("Monkey Escape v1.2", "+1 Speed Monkey Escape Codes 辅助已加载\n按 RightShift 打开 UI", 5, "Success")
 
 print(string.format("[MonkeyEscape] %s (PlaceId: %d) 辅助加载完成", GameName, PlaceId))
