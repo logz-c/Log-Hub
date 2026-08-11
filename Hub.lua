@@ -1,7 +1,7 @@
 --[[
     ╔══════════════════════════════════════════════════════════════════╗
     ║                         LOG-HUB 脚本中心                          ║
-    ║                      Version 2.0.0                               ║
+    ║                      Version 2.2.0                               ║
     ║                         Created by log_quick                     ║
     ║                                                                  ║
     ║  功能：                                                          ║
@@ -158,9 +158,13 @@ local function loadScriptByUrl(url, label)
         warn(("[Log-Hub] 获取%s失败: %s"):format(label, tostring(result)))
         return false
     end
-    local execOk, execErr = pcall(function()
-        loadstring(result)()
-    end)
+    -- 先检查 loadstring 是否返回 nil（语法错误）
+    local compileFn, compileErr = loadstring(result)
+    if not compileFn then
+        warn(("[Log-Hub] %s 语法错误: %s"):format(label, tostring(compileErr)))
+        return false
+    end
+    local execOk, execErr = pcall(compileFn)
     if not execOk then
         warn(("[Log-Hub] 执行%s失败: %s"):format(label, tostring(execErr)))
         return false
@@ -216,7 +220,7 @@ local function loadGenericScript()
 
     local Window = QuantumUI.new({
         Title    = "通用模式 - " .. GameName,
-        Subtitle = "PlaceId: " .. tostring(PlaceId) .. "  |  Log-Hub v2.0.0",
+        Subtitle = "PlaceId: " .. tostring(PlaceId) .. "  |  Log-Hub v2.2.0",
         ThemeColor = Color3.fromRGB(0, 200, 255),
         Transparency = 0.3,
         Size     = UDim2.new(0, 560, 0, 440),
@@ -246,6 +250,8 @@ local function loadGenericScript()
         JumpPower       = 50,
         SetJumpPower    = false,
         AntiAFK         = false,
+        LoopTpInterval  = 0.5,
+        LoopTpEnabled   = false,
     }
 
     -- ── TAB 1: 位置 & 信息 ──
@@ -427,7 +433,309 @@ local function loadGenericScript()
         end,
     })
 
-    -- ── TAB 2: 玩家移动 ──
+    InfoTab:AddSection({ Name = "循环传送" })
+
+    InfoTab:AddSlider({
+        Name      = "循环间隔",
+        Min       = 0.05, Max = 5, Default = 0.5, Increment = 0.05,
+        Suffix    = "s",
+        Flag      = "Generic_LoopTpInterval",
+        Callback  = function(v) miscState.LoopTpInterval = v end,
+    })
+
+    InfoTab:AddToggle({
+        Name      = "启用循环传送",
+        Default   = false,
+        Flag      = "Generic_LoopTpEnabled",
+        Callback  = function(s)
+            miscState.LoopTpEnabled = s
+            if s then
+                task.spawn(function()
+                    local warnCount = 0
+                    while miscState.LoopTpEnabled do
+                        local root = getRoot()
+                        if root then
+                            local x = tonumber(tbX and tbX:Get() or "")
+                            local y = tonumber(tbY and tbY:Get() or "")
+                            local z = tonumber(tbZ and tbZ:Get() or "")
+                            if x and y and z then
+                                pcall(function()
+                                    root.CFrame = CFrame.new(x, y, z)
+                                    local hum = getHum()
+                                    if hum then
+                                        pcall(function() hum:SetStateEnabled(Enum.HumanoidStateType.FallingDown, false) end)
+                                    end
+                                end)
+                                warnCount = 0
+                            else
+                                warnCount = warnCount + 1
+                                if warnCount == 1 or warnCount % 20 == 0 then
+                                    Window:Notify({ Title = "循环传送跳过", Content = "X/Y/Z 不是有效数字，请检查输入框", Duration = 2, Type = "Warning" })
+                                end
+                            end
+                        end
+                        task.wait(miscState.LoopTpInterval)
+                    end
+                end)
+                Window:Notify({ Title = "循环传送", Content = "已启用，每隔 " .. tostring(miscState.LoopTpInterval) .. "s 传送一次", Duration = 2, Type = "Success" })
+            else
+                Window:Notify({ Title = "循环传送", Content = "已停止", Duration = 1.5, Type = "Info" })
+            end
+        end,
+    })
+
+    InfoTab:AddParagraph({
+        Title   = "循环传送说明",
+        Content = "用于防止被游戏拉回原位 / 反传送。\n建议间隔 0.3s ~ 1s，间隔太小可能导致卡顿。\n先填入坐标再开启开关。",
+    })
+
+    -- ── TAB 2: 场景传送 (该游戏所有子场景) ──
+    local SceneTab = Window:AddTab({
+        Name = "场景传送",
+        Icon = "rbxassetid://6035153470",
+    })
+
+    SceneTab:AddSection({ Name = "当前游戏信息" })
+
+    local sceneInfoLabel = SceneTab:AddLabel({ Text = "加载中..." })
+    local function refreshSceneInfo()
+        local universeId = game.GameId
+        local placeId    = game.PlaceId
+        local jobId      = tostring(game.JobId or "N/A")
+        sceneInfoLabel:SetText(string.format(
+            "UniverseId (GameId):  %d\n当前 PlaceId:         %d\n当前 JobId:           %s\n游戏名:               %s",
+            universeId, placeId, jobId, GameName
+        ))
+    end
+    refreshSceneInfo()
+
+    SceneTab:AddButton({
+        Name = "📋 复制当前 PlaceId",
+        Callback = function()
+            if setclipboard then
+                setclipboard(tostring(game.PlaceId))
+                Window:Notify({ Title = "已复制", Content = "PlaceId: " .. tostring(game.PlaceId), Duration = 2, Type = "Success" })
+            else
+                Window:Notify({ Title = "失败", Content = "执行器不支持剪贴板", Duration = 2, Type = "Error" })
+            end
+        end,
+    })
+
+    SceneTab:AddSection({ Name = "子场景列表" })
+
+    -- 用 table 缓存 displayName -> placeId，传送时反查
+    local sceneCache = {}      -- [displayName] = placeId(number)
+    local displayItems = {}    -- 给 Dropdown 用
+
+    local sceneDropdown = SceneTab:AddDropdown({
+        Name = "选择目标子场景",
+        Items = {},
+        Default = nil,
+        Multi = false,
+        Flag = "Generic_SceneTarget",
+    })
+
+    -- 通用：把 placeId + name 写入 cache 并刷新 Dropdown
+    local function applyScenes(scenes)
+        -- scenes: {{id=.., name=..}, ...}
+        sceneCache = {}
+        displayItems = {}
+        for _, s in ipairs(scenes) do
+            local pid = tonumber(s.id)
+            local name = tostring(s.name or "未命名")
+            -- 避免重名：同名加 PlaceId 后缀
+            local displayName = string.format("%s  [%d]", name, pid)
+            -- 若仍然重复，再加序号
+            while sceneCache[displayName] do
+                displayName = displayName .. " "
+            end
+            sceneCache[displayName] = pid
+            table.insert(displayItems, displayName)
+        end
+        sceneDropdown:Refresh(displayItems)
+    end
+
+    SceneTab:AddButton({
+        Name = "🔍 自动查询当前游戏子场景",
+        Callback = function()
+            task.spawn(function()
+                local universeId = game.GameId
+                if not universeId or universeId == 0 then
+                    Window:Notify({ Title = "失败", Content = "无法获取 GameId (UniverseId)", Duration = 3, Type = "Error" })
+                    return
+                end
+                Window:Notify({ Title = "查询中", Content = "正在向 Roblox API 请求子场景...", Duration = 3, Type = "Info" })
+                local HttpService = game:GetService("HttpService")
+                local scenes = {}
+                local cursor = ""
+                local pageCount = 0
+                -- 分页拉取，最多 5 页防止失控
+                while pageCount < 5 do
+                    local url = string.format(
+                        "https://games.roblox.com/v1/games/%d/places?limit=100%s",
+                        universeId,
+                        (cursor ~= "" and ("&cursor=" .. cursor)) or ""
+                    )
+                    local ok, resp = pcall(function() return game:HttpGet(url) end)
+                    if not ok then
+                        Window:Notify({ Title = "查询失败", Content = "HTTP 请求失败\n" .. tostring(resp):sub(1, 120), Duration = 4, Type = "Error" })
+                        return
+                    end
+                    local data
+                    local pok2, perr = pcall(function() data = HttpService:JSONDecode(resp) end)
+                    if not pok2 or type(data) ~= "table" then
+                        Window:Notify({ Title = "解析失败", Content = "返回不是有效 JSON", Duration = 3, Type = "Error" })
+                        return
+                    end
+                    local arr = data.data or {}
+                    for _, p in ipairs(arr) do
+                        table.insert(scenes, { id = p.id, name = p.name })
+                    end
+                    cursor = data.nextPageCursor
+                    pageCount = pageCount + 1
+                    if not cursor or cursor == "" then break end
+                    task.wait(0.3)
+                end
+                if #scenes == 0 then
+                    Window:Notify({ Title = "未找到", Content = "该游戏没有公开的子场景", Duration = 3, Type = "Warning" })
+                    return
+                end
+                applyScenes(scenes)
+                Window:Notify({
+                    Title = "查询成功",
+                    Content = string.format("已加载 %d 个子场景\n可在下拉框中选择", #scenes),
+                    Duration = 4, Type = "Success",
+                })
+                print(("[Log-Hub] 查询到 %d 个子场景"):format(#scenes))
+            end)
+        end,
+    })
+
+    SceneTab:AddButton({
+        Name = "🚀 传送到选中子场景",
+        Callback = function()
+            local selected = sceneDropdown:Get()
+            if not selected or selected == "" then
+                Window:Notify({ Title = "失败", Content = "请先在下拉框选择目标场景", Duration = 2, Type = "Error" })
+                return
+            end
+            local pid = sceneCache[selected]
+            if not pid then
+                Window:Notify({ Title = "失败", Content = "无法解析 PlaceId，请重新查询", Duration = 3, Type = "Error" })
+                return
+            end
+            local TeleportService = game:GetService("TeleportService")
+            Window:Notify({
+                Title = "传送中",
+                Content = string.format("正在传送到 PlaceId: %d\n请稍候...", pid),
+                Duration = 4, Type = "Info",
+            })
+            print(("[Log-Hub] 场景传送: PlaceId=%d (%s)"):format(pid, selected))
+            task.wait(0.4)
+            local ok, err = pcall(function()
+                TeleportService:TeleportAsync(pid, { LocalPlayer })
+            end)
+            if not ok then
+                Window:Notify({ Title = "传送失败", Content = tostring(err):sub(1, 200), Duration = 5, Type = "Error" })
+                warn("[Log-Hub] 场景传送失败:", err)
+            end
+        end,
+    })
+
+    SceneTab:AddSection({ Name = "手动输入 PlaceId" })
+
+    local manualPlaceId = SceneTab:AddTextbox({
+        Name = "目标 PlaceId",
+        Placeholder = "例如: 6839179744",
+        Default = "",
+        ClearOnFocus = true,
+        Flag = "Generic_SceneManualPid",
+    })
+
+    SceneTab:AddButton({
+        Name = "🚀 传送到该 PlaceId",
+        Callback = function()
+            local pid = tonumber(manualPlaceId and manualPlaceId:Get() or "")
+            if not pid then
+                Window:Notify({ Title = "失败", Content = "请输入有效的 PlaceId 数字", Duration = 2, Type = "Error" })
+                return
+            end
+            local TeleportService = game:GetService("TeleportService")
+            Window:Notify({ Title = "传送中", Content = "正在传送到 PlaceId: " .. pid, Duration = 4, Type = "Info" })
+            print(("[Log-Hub] 手动场景传送: PlaceId=%d"):format(pid))
+            task.wait(0.4)
+            local ok, err = pcall(function()
+                TeleportService:TeleportAsync(pid, { LocalPlayer })
+            end)
+            if not ok then
+                Window:Notify({ Title = "传送失败", Content = tostring(err):sub(1, 200), Duration = 5, Type = "Error" })
+                warn("[Log-Hub] 手动场景传送失败:", err)
+            end
+        end,
+    })
+
+    SceneTab:AddSection({ Name = "传送至指定服务器 (JobId)" })
+
+    local jobIdTb = SceneTab:AddTextbox({
+        Name = "目标 JobId",
+        Placeholder = "例如: 00000000-0000-0000-0000-000000000000",
+        Default = "",
+        ClearOnFocus = true,
+        Flag = "Generic_SceneJobId",
+    })
+
+    SceneTab:AddButton({
+        Name = "🚀 传送至 JobId 服务器",
+        Callback = function()
+            local pid = tonumber(manualPlaceId and manualPlaceId:Get() or "") or game.PlaceId
+            local jid = jobIdTb and jobIdTb:Get() or ""
+            if jid == "" then
+                Window:Notify({ Title = "失败", Content = "JobId 不能为空", Duration = 2, Type = "Error" })
+                return
+            end
+            local TeleportService = game:GetService("TeleportService")
+            Window:Notify({
+                Title = "传送中",
+                Content = string.format("PlaceId: %d\nJobId: %s", pid, jid),
+                Duration = 4, Type = "Info",
+            })
+            print(("[Log-Hub] JobId 传送: PlaceId=%d JobId=%s"):format(pid, jid))
+            task.wait(0.4)
+            local ok, err = pcall(function()
+                TeleportService:TeleportToPlaceInstance(pid, jid, LocalPlayer)
+            end)
+            if not ok then
+                Window:Notify({ Title = "传送失败", Content = tostring(err):sub(1, 200), Duration = 5, Type = "Error" })
+                warn("[Log-Hub] JobId 传送失败:", err)
+            end
+        end,
+    })
+
+    SceneTab:AddButton({
+        Name = "🔄 刷新游戏信息",
+        Callback = function()
+            refreshSceneInfo()
+            Window:Notify({ Title = "已刷新", Content = "当前游戏信息已更新", Duration = 2, Type = "Info" })
+        end,
+    })
+
+    SceneTab:AddSection({ Name = "说明" })
+
+    SceneTab:AddParagraph({
+        Title   = "场景传送说明",
+        Content = table.concat({
+            "• 子场景 = 同一游戏下的不同 Place",
+            "• 自动查询通过 Roblox 官方 API:",
+            "  games.roblox.com/v1/games/{UniverseId}/places",
+            "• 部分游戏可能未公开子场景列表",
+            "• 也可在『手动输入 PlaceId』中输入已知 ID",
+            "• JobId 传送可进入指定服务器实例",
+            "• 传送需 TeleportService 权限",
+            "• 传送后当前脚本会被卸载，需重新注入",
+        }, "\n"),
+    })
+
+    -- ── TAB 3: 玩家移动 ──
     local PlayerTab = Window:AddTab({
         Name = "玩家",
         Icon = "rbxassetid://6034466796",
@@ -509,7 +817,7 @@ local function loadGenericScript()
         end
     end)
 
-    -- ── TAB 3: 杂项 ──
+    -- ── TAB 4: 杂项 ──
     local MiscTab = Window:AddTab({
         Name = "杂项",
         Icon = "rbxassetid://6031280882",
@@ -586,12 +894,18 @@ local function loadGenericScript()
             "   (已后台自动加载，失败可按上方按钮手动加载)",
             "",
             "2. 位置/信息 Tab: 实时坐标 + 复制坐标",
-            "   + 坐标传送 (输入 X/Y/Z → 传送按钮)",
+            "   + 单次传送 (输入 X/Y/Z → 📌 按钮)",
+            "   + 循环传送 (防拉回，可调间隔)",
             "   + 一键填入当前坐标到输入框",
             "",
-            "3. 玩家 Tab: WalkSpeed / JumpPower / Anti-AFK",
+            "3. 场景传送 Tab: 自动查询该游戏所有子场景",
+            "   + 下拉框选择 → 一键传送到目标 Place",
+            "   + 手动输入 PlaceId 传送",
+            "   + JobId 指定服务器传送",
             "",
-            "4. 杂项 Tab: 重生 / 重新注入 Hub",
+            "4. 玩家 Tab: WalkSpeed / JumpPower / Anti-AFK",
+            "",
+            "5. 杂项 Tab: 重生 / 重新注入 Hub",
         }, "\n"),
     })
 
@@ -600,7 +914,7 @@ local function loadGenericScript()
     Window:Notify({
         Title   = "通用模式已加载",
         Content = "游戏: " .. GameName .. "\nPlaceId: " .. tostring(PlaceId) ..
-                  "\n\nInfinite Yield (RightShift) +\n坐标获取 / 坐标传送 / WalkSpeed / JumpPower / Anti-AFK\n按 RightControl 切换 UI",
+                  "\n\nInfinite Yield +\n坐标传送 / 循环传送 / 场景传送\nWalkSpeed / Anti-AFK\n按 RightControl 切换 UI",
         Duration = 7,
         Type    = "Info",
     })
