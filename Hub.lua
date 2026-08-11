@@ -77,7 +77,7 @@ local GAME_REGISTRY = {
         PlaceIds = { 9872472334 },
         GameIds  = { 11818772280 },
         ScriptPath = "/Evade_QuantumUI.lua",
-        Description = "v2.0: 基于真实源码重写 | Nextbot ESP(workspace.Game.Players) + 复活Remote(ChangePlayerMode) + MoneyFarm(复活赚Tokens) + TicketFarm(收集活动票) + 天空盒AFK坐标(6007,7005,8005) + 源码CFrame SpeedBoost + T/Y/U/R快捷键",
+        Description = "v2.0: 基于真实源码还原 — 自动重生(ChangePlayerMode) + 即时复活/搬运(Interact Revive/Carry) + 自动复活 + 快速复活(ReviveTime) + Money/AFK/Ticket Farm + CFrame Speed Boost(MoveDirection) + NoClip/Fly + Nextbot/玩家/倒地/票券ESP + 全亮 + 移除障碍/KillBricks + Rejoin + Anti-AFK",
     },
     -- 未来扩展:
     -- {
