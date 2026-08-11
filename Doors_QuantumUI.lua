@@ -485,26 +485,55 @@ end
 local function isCabinet(inst)
     if not inst then return false end
     local name = inst.Name:lower()
-    return name:find("cabinet") or name:find("wardrobe") or name:find("locker")
-        or name:find("closet") or name:find("toolshed") or name:find("bed")
-        or name:find("dumpster") or name:find("vent")
+    return name == "cabinet" or name == "wardrobe" or name == "locker_small" or name == "locker"
+        or name == "closet" or name == "toolshed_small" or name == "toolshed"
+        or name == "dumpster" or name == "vent"
+        or name:find("nightstand") or name:find("dresser")
 end
 
 local function isChest(inst)
     if not inst then return false end
     local name = inst.Name:lower()
-    return name:find("chest") or name:find("drawer") or name:find("box")
-        or name:find("toolbox") or name:find("table") or name:find("desk")
+    return name == "chestbox" or name == "chest" or name == "drawer"
+        or name == "toolbox" or name:find("desk") or name:find("table")
 end
 
+-- 检查实例是否嵌套在容器/书架内部（内部部件不应被单独标记）
+local function isInsideContainer(inst)
+    if not inst then return false end
+    local ancestorsToCheck = {
+        "Modular_Bookshelf", "Bookshelf", "Cabinet", "Wardrobe",
+        "Locker_Small", "ChestBox", "Toolbox", "Toolshed_Small",
+        "Nightstand", "Dresser", "Drawer", "Desk", "Table",
+        "Bed", "Dumpster", "Vent",
+    }
+    local parent = inst.Parent
+    while parent do
+        for _, keyword in ipairs(ancestorsToCheck) do
+            if parent.Name:lower() == keyword:lower() then
+                return true
+            end
+        end
+        parent = parent.Parent
+    end
+    return false
+end
+
+-- 精准匹配：只有真正的门（顶层 Door/Door_Block/BigDoor）
 local function isDoor(inst)
     if not inst then return false end
+    -- 排除容器内部的部件
+    if isInsideContainer(inst) then return false end
     local name = inst.Name:lower()
-    return name == "door" or name:find("door")
+    -- 精准匹配门的完整名称，不含子部件
+    return name == "door" or name == "door_block" or name == "bigdoor"
+        or name == "dooropen" or name == "doorclose" or name == "exitdoor"
+        or name == "entrancedoor"
 end
 
 local function isLever(inst)
     if not inst then return false end
+    if isInsideContainer(inst) then return false end
     local name = inst.Name:lower()
     return name:find("lever") or name:find("switch") or name:find("valve")
         or name:find("timerlever") or name:find("leverforgate")
@@ -512,14 +541,16 @@ end
 
 local function isGold(inst)
     if not inst then return false end
+    if isInsideContainer(inst) then return false end
     local name = inst.Name:lower()
     return name:find("gold") or name:find("goldpile")
 end
 
 local function isMinecartTrack(inst)
     if not inst then return false end
+    if isInsideContainer(inst) then return false end
     local name = inst.Name:lower()
-    return name:find("minecart") or name:find("track") or name:find("minecarttrack")
+    return name:find("minecart") or name:find("minecarttrack")
 end
 
 -- 锚点解谜函数
@@ -734,10 +765,44 @@ local function updateESP()
             for _, v in pairs(room:GetDescendants()) do
                 if isDestroyed then return end
                 local name = v.Name
+                local isModelOrPart = v:IsA("Model") or v:IsA("BasePart")
+                if not isModelOrPart then continue end
 
-                -- 物品（必须是有可交互Prompt的真实物品）
+                -- ===== 第一优先级：容器类（柜子/宝箱/书架/工具箱）=====
+                -- 只有带交互 Prompt 的才是真正可交互容器，避免柜子子部件被误标
+                local matchedAsContainer = false
+
+                if SETTINGS.CabinetESP and isCabinet(v) then
+                    local hasPrompt = v:FindFirstChild("ActivateEventPrompt", true)
+                        or v:FindFirstChild("ModulePrompt", true)
+                    if hasPrompt or v:IsA("Model") then
+                        createHighlight(v, SETTINGS.CabinetESPColor, "Cabinet", "Cabinet", "Cabinet")
+                        matchedAsContainer = true
+                    end
+                elseif SETTINGS.ChestESP and isChest(v) then
+                    local hasPrompt = v:FindFirstChild("ActivateEventPrompt", true)
+                        or v:FindFirstChild("ModulePrompt", true)
+                    if hasPrompt or v:IsA("Model") then
+                        createHighlight(v, SETTINGS.ChestESPColor, "Chest", "Chest", "Chest")
+                        matchedAsContainer = true
+                    end
+                end
+
+                -- 如果当前对象是容器，跳过后续物品/门的子匹配
+                if matchedAsContainer then
+                    -- 但也要检查容器是否是书本书架
+                    goto continue_scan
+                end
+
+                -- ===== 第二优先级：跳过容器内部的装饰性子物体 =====
+                -- 容器内部的物品（书架里的假书/假打火机等）不单独标记
+                if isInsideContainer(v) then
+                    goto continue_scan
+                end
+
+                -- ===== 第三优先级：物品/钥匙/书本/断路器等 =====
                 if SETTINGS.DoorsESP and ESP_Items[name] then
-                    if (v:IsA("BasePart") or v:IsA("Model")) and isRealPickup(v) then
+                    if isRealPickup(v) then
                         createHighlight(v, SETTINGS.DoorsESPColor, name, MiscPickups[name] or name, "Items")
                     end
                 end
@@ -766,26 +831,15 @@ local function updateESP()
                     end
                 end
 
-                if SETTINGS.CabinetESP and isCabinet(v) then
-                    if v:IsA("Model") or v:IsA("BasePart") then
-                        createHighlight(v, SETTINGS.CabinetESPColor, "Cabinet", "Cabinet", "Cabinet")
-                    end
-                end
-
-                if SETTINGS.ChestESP and isChest(v) then
-                    if v:IsA("Model") or v:IsA("BasePart") then
-                        createHighlight(v, SETTINGS.ChestESPColor, "Chest", "Chest", "Chest")
-                    end
-                end
-
+                -- ===== 第四优先级：门/拉杆/金堆/矿车轨道 =====
                 if SETTINGS.OtherESP then
-                    if isDoor(v) and (v:IsA("Model") or v:IsA("BasePart")) then
+                    if isDoor(v) then
                         createHighlight(v, SETTINGS.OtherESPColor, "Door", "Door", "Other")
                     end
-                    if (isLever(v) or name == "LeverForGate" or name == "TimerLever") and (v:IsA("Model") or v:IsA("BasePart")) then
+                    if isLever(v) or name == "LeverForGate" or name == "TimerLever" then
                         createHighlight(v, SETTINGS.LeverESPColor, "Lever", "Lever", "Other")
                     end
-                    if isGold(v) and (v:IsA("Model") or v:IsA("BasePart")) then
+                    if isGold(v) then
                         createHighlight(v, SETTINGS.GoldESPColor, "Gold", "Gold Pile", "Other")
                     end
                 end
@@ -797,11 +851,11 @@ local function updateESP()
                 end
 
                 if SETTINGS.MinecartPathESP and isMinecartTrack(v) then
-                    if v:IsA("Model") or v:IsA("BasePart") then
-                        local pathColor = MinecartPathNodeColor[SETTINGS.MinecartPathColor] or MinecartPathNodeColor.Yellow
-                        createHighlight(v, pathColor, "MinecartPath", "Minecart", "Minecart")
-                    end
+                    local pathColor = MinecartPathNodeColor[SETTINGS.MinecartPathColor] or MinecartPathNodeColor.Yellow
+                    createHighlight(v, pathColor, "MinecartPath", "Minecart", "Minecart")
                 end
+
+                ::continue_scan::
             end
         end
 
