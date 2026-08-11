@@ -77,7 +77,7 @@ local GAME_REGISTRY = {
         PlaceIds = { 9872472334 },
         GameIds  = { 11818772280 },
         ScriptPath = "/Evade_QuantumUI.lua",
-        Description = "v1.0: Nextbot ESP(红)/玩家ESP(蓝)/物品ESP(金)/门ESP(绿) + 自动重生/自动拾取/自动开门 + WalkSpeed/JumpPower/InfJump/NoClip/Fly + 低重力/自定义FOV + 全亮/无雾 + Anti-AFK + 传送快捷键(T/Y/U)",
+        Description = "v2.0: 基于真实源码重写 | Nextbot ESP(workspace.Game.Players) + 复活Remote(ChangePlayerMode) + MoneyFarm(复活赚Tokens) + TicketFarm(收集活动票) + 天空盒AFK坐标(6007,7005,8005) + 源码CFrame SpeedBoost + T/Y/U/R快捷键",
     },
     -- 未来扩展:
     -- {
