@@ -1,22 +1,24 @@
 --[[
-    The Strongest Battlegrounds 辅助脚本 v1.0 (Quantum UI 版)
-    基于 Spectral_Hub (claymannn12-ship-it) + Antimony + Speed Hub X 源码还原
-    适配 PlaceId: 10449761463 (The Strongest Battlegrounds)
+    The Strongest Battlegrounds 辅助脚本 v2.0 (Quantum UI 版)
+    基于 NexamTSB (helldevelopment/RobloxScripts) 真实源码结构重写
 
-    游戏内部结构 (源码分析):
-      LocalPlayer.Mana                   — 技能资源 (Ultimate需要Mana)
-      Humanoid:GetState()                — Stunned/Ragdoll/Blocking 状态检测
-      ReplicatedStorage.Packages         — Knit/Spring 模块
-      Players:GetPlayers()               — 敌人遍历
-      技能系统: M1(普攻)/技能1~4/终极/觉醒/冲刺
-      角色种类: Hero Hunter / Saitama / Garou / Deadly Ninja / Brute / etc.
+    适配 PlaceId: 10449761463  GameId: 3808081382
+
+    游戏真实内部结构 (源码还原):
+      LocalPlayer.Character.Communicate:FireServer()  — 所有技能/操作入口
+        Goal="Console Move"  + Tool/ToolName  → 使用技能 (从 Backpack 取 Tool)
+        Goal="KeyPress"      + Key            → 按键 (G=终极/觉醒)
+        Goal="LeftClick" / "LeftClickRelease" → M1 普攻
+      LocalPlayer:GetAttribute("Ultimate")            — 终极条 (0~100)
+      LocalPlayer.PlayerGui.Hotbar.Backpack.Hotbar    — 技能栏 (读取可用技能/冷却)
+      v:GetAttribute("Kills")                          — 目标选择: 击杀数越少越优先
 
     功能:
-      战斗: Kill Aura / Hitbox Expander / Auto Block / Auto Attack / No Cooldown / Aimbot
-      移动: WalkSpeed / JumpPower / NoClip / Fly / InfJump / No Stun / No Ragdoll / No Dash Cooldown
-      视觉: Player ESP / Health ESP / Tracers / 全亮
-      农场: Auto Farm / Auto Reset (低血量重置)
-      杂项: Server Hop / Rejoin / Anti-AFK / 坐标
+      [战斗] Attack Aura / Auto Combo / Auto Ultimate / Auto Block
+      [农场] Kill Farm / Auto Reset (低血量重置) / Auto Ultimate
+      [移动] WalkSpeed / JumpPower / InfJump / NoClip / Fly / NoStun / NoRagdoll
+      [视觉] 玩家ESP(高亮+血量+距离) / 全亮
+      [服务器] Rejoin / Server Hop   [杂项] Anti-AFK / 坐标
 
     安全承诺: 不采集任何信息，不 loadstring 外部功能代码，所有逻辑本地实现。
 ]]
@@ -83,21 +85,22 @@ local Workspace = workspace
 local Lighting = game:GetService("Lighting")
 
 -- ══════════════════════════════════════════════════════════════════
--- 3. SETTINGS
+-- 3. SETTINGS (与 NEXTAM 配置结构一致, 用于 Config 保存/加载)
 -- ══════════════════════════════════════════════════════════════════
 local SETTINGS = {
-    -- Combat
-    TSB_KillAura = false,
-    TSB_KillAuraRange = 15,
-    TSB_HitboxExpander = false,
-    TSB_HitboxSize = 10,
+    -- 战斗
+    TSB_AttackAura = false,
+    TSB_AuraRange = 5,
+    TSB_AutoCombo = false,
+    TSB_AutoUltimate = false,
     TSB_AutoBlock = false,
-    TSB_AutoAttack = false,
-    TSB_NoCooldown = false,
-    TSB_Aimbot = false,
-    TSB_AimbotRange = 100,
 
-    -- Movement
+    -- 农场
+    TSB_KillFarm = false,
+    TSB_AutoReset = false,
+    TSB_AutoResetHP = 20,
+
+    -- 移动
     TSB_WalkSpeed = false,
     TSB_WalkSpeedValue = 16,
     TSB_JumpPower = false,
@@ -110,21 +113,15 @@ local SETTINGS = {
     TSB_NoRagdoll = false,
     TSB_NoDashCooldown = false,
 
-    -- Visual
+    -- 视觉
     ESP_Player = false,
     ESP_PlayerColor = Color3.fromRGB(0, 200, 255),
     ESP_Health = false,
-    ESP_Tracers = false,
     ESP_Distance = true,
     ESP_Refresh = 0.1,
     TSB_Fullbright = false,
 
-    -- Farm
-    TSB_AutoFarm = false,
-    TSB_AutoReset = false,
-    TSB_AutoResetHP = 20,
-
-    -- Misc
+    -- 杂项
     TSB_AntiAFK = false,
 }
 
@@ -133,37 +130,29 @@ local SETTINGS = {
 -- ══════════════════════════════════════════════════════════════════
 local Window = nil
 local isDestroyed = false
-local noclipConn = nil
-local infJumpConn = nil
-local flyConn = nil
-local flyBV = nil
-local flyBG = nil
-local killAuraConn = nil
-local autoBlockConn = nil
-local autoAttackConn = nil
-local noStunConn = nil
-local noRagdollConn = nil
-local noDashConn = nil
-local noCooldownConn = nil
-local espConn = nil
-local espFolder = nil
-local farmConn = nil
-local autoResetConn = nil
-local antiAFKConn = nil
-local aimbotConn = nil
+local Humanoid = nil
+
+local auraConn, comboConn, blockConn, walkConn, jumpConn
+local infJumpConn, noclipConn, flyConn, noStunConn, noRagdollConn, noDashConn
+local farmConn, espConn, aimConn, antiAFKConn
+local flyBV, flyBG
+local espFolder
 local savedLighting = {}
+local blockHeld = false
 
 -- ══════════════════════════════════════════════════════════════════
 -- 5. 通知辅助函数
 -- ══════════════════════════════════════════════════════════════════
 local function notify(title, content, duration, ntype)
     if Window then
-        Window:Notify({
-            Title    = title,
-            Content  = content,
-            Duration = duration or 3,
-            Type     = ntype or "Info"
-        })
+        pcall(function()
+            Window:Notify({
+                Title    = title,
+                Content  = content,
+                Duration = duration or 3,
+                Type     = ntype or "Info"
+            })
+        end)
     else
         pcall(function()
             StarterGui:SetCore("SendNotification", {
@@ -174,66 +163,92 @@ local function notify(title, content, duration, ntype)
 end
 
 -- ══════════════════════════════════════════════════════════════════
--- 6. 工具函数 (来自 Spectral_Hub 源码还原)
+-- 6. 工具函数 (角色/状态)
 -- ══════════════════════════════════════════════════════════════════
 local function getChar()
     return LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
 end
-
 local function getHum()
-    local char = getChar()
-    return char and char:FindFirstChildOfClass("Humanoid")
+    local c = getChar()
+    return c and c:FindFirstChildOfClass("Humanoid")
 end
-
 local function getRoot()
-    local char = getChar()
-    return char and char:FindFirstChild("HumanoidRootPart")
+    local c = getChar()
+    return c and c:FindFirstChild("HumanoidRootPart")
+end
+local function getCommunicate()
+    local c = getChar()
+    return c and c:FindFirstChild("Communicate")
 end
 
--- 来自源码: 获取最近敌人 (多因素优先级评分)
-local function getClosestEnemy(range)
-    local closest = nil
-    local highestScore = -1
-    local myRoot = getRoot()
-    if not myRoot then return nil end
+-- ══════════════════════════════════════════════════════════════════
+-- 7. 真实游戏操作函数 (源码还原自 NexamTSB)
+--    Communicate:FireServer 是 TSB 唯一技能/操作入口
+-- ══════════════════════════════════════════════════════════════════
 
-    for _, player in ipairs(Players:GetPlayers()) do
-        if player ~= LocalPlayer and player.Character then
-            local hum = player.Character:FindFirstChildOfClass("Humanoid")
-            local hrp = player.Character:FindFirstChild("HumanoidRootPart")
-            if hum and hrp and hum.Health > 0 then
-                local dist = (myRoot.Position - hrp.Position).Magnitude
-                if dist <= range then
-                    -- 来自源码: 评分 = (100 - 血量) + 状态加成
-                    local score = (100 - hum.Health)
-                    if hum:GetState() == Enum.HumanoidStateType.Stunned
-                    or hum:GetState() == Enum.HumanoidStateType.Ragdoll then
-                        score = score + 500
-                    end
-                    if score > highestScore then
-                        closest = player
-                        highestScore = score
+-- 使用指定技能 (从 Backpack 找到对应 Tool)
+local function UseAbility(Ability)
+    local Com = getCommunicate()
+    if not Com then return end
+    local Tool = LocalPlayer.Backpack:FindFirstChild(Ability)
+    local Arguments = {
+        [1] = {
+            ["Tool"] = Tool,
+            ["Goal"] = "Console Move",
+            ["ToolName"] = tostring(Ability)
+        }
+    }
+    pcall(function() Com:FireServer(unpack(Arguments)) end)
+end
+
+-- 读取技能栏, 返回一个可用的技能名 (无冷却且可见)
+local function RandomAbility()
+    local hotbar = LocalPlayer.PlayerGui and LocalPlayer.PlayerGui:FindFirstChild("Hotbar")
+    if not hotbar then return nil end
+    local backpack = hotbar:FindFirstChild("Backpack")
+    if not backpack then return nil end
+    local hb = backpack:FindFirstChild("Hotbar")
+    if not hb then return nil end
+    local Abilities = {}
+    local NotEmpty = false
+    for _, v in ipairs(hb:GetChildren()) do
+        if v.ClassName ~= "UIListLayout" and v and v.Visible then
+            local base = v:FindFirstChild("Base")
+            if base then
+                local toolName = base:FindFirstChild("ToolName")
+                local toolText = toolName and toolName.Text or ""
+                if toolText ~= "N/A" then
+                    if not base:FindFirstChild("Cooldown") then
+                        table.insert(Abilities, toolText)
+                        NotEmpty = true
                     end
                 end
             end
         end
     end
-    return closest
+    if NotEmpty then
+        return Abilities[math.random(1, #Abilities)]
+    end
+    return nil
 end
 
--- 来自源码: 获取所有范围内敌人
-local function getAllEnemiesInRange(range)
+-- 数据绑定能力: 读取 hotbar 中第一个可用技能名 (用于 AutoCombo 依次释放)
+local function GetAllReadyAbilities()
+    local hotbar = LocalPlayer.PlayerGui and LocalPlayer.PlayerGui:FindFirstChild("Hotbar")
+    if not hotbar then return {} end
+    local backpack = hotbar:FindFirstChild("Backpack")
+    if not backpack then return {} end
+    local hb = backpack:FindFirstChild("Hotbar")
+    if not hb then return {} end
     local result = {}
-    local myRoot = getRoot()
-    if not myRoot then return result end
-    for _, player in ipairs(Players:GetPlayers()) do
-        if player ~= LocalPlayer and player.Character then
-            local hum = player.Character:FindFirstChildOfClass("Humanoid")
-            local hrp = player.Character:FindFirstChild("HumanoidRootPart")
-            if hum and hrp and hum.Health > 0 then
-                local dist = (myRoot.Position - hrp.Position).Magnitude
-                if dist <= range then
-                    table.insert(result, player)
+    for _, v in ipairs(hb:GetChildren()) do
+        if v.ClassName ~= "UIListLayout" and v and v.Visible then
+            local base = v:FindFirstChild("Base")
+            if base then
+                local toolName = base:FindFirstChild("ToolName")
+                local toolText = toolName and toolName.Text or ""
+                if toolText ~= "N/A" and not base:FindFirstChild("Cooldown") then
+                    table.insert(result, toolText)
                 end
             end
         end
@@ -241,102 +256,162 @@ local function getAllEnemiesInRange(range)
     return result
 end
 
--- 来自源码: 面朝目标 (预测移动)
-local function faceTarget(target)
-    if not target or not target.Character then return end
-    local targetHRP = target.Character:FindFirstChild("HumanoidRootPart")
+-- 触发终极/觉醒 (G 键)
+local function ActivateUltimate()
+    local Com = getCommunicate()
+    if not Com then return end
+    local Arguments = {
+        [1] = {
+            ["MoveDirection"] = Vector3.new(0, 0, 0),
+            ["Key"] = Enum.KeyCode.G,
+            ["Goal"] = "KeyPress"
+        }
+    }
+    pcall(function() Com:FireServer(unpack(Arguments)) end)
+end
+
+-- M1 普攻 (可选 2 秒后释放左键)
+local function Hit(Release)
+    local Com = getCommunicate()
+    if not Com then return end
+    local Arguments = { [1] = { ["Goal"] = "LeftClick" } }
+    pcall(function() Com:FireServer(unpack(Arguments)) end)
+    if Release then
+        delay(2, function()
+            local Com2 = getCommunicate()
+            if not Com2 then return end
+            local Arguments2 = { [1] = { ["Goal"] = "LeftClickRelease" } }
+            pcall(function() Com2:FireServer(unpack(Arguments2)) end)
+        end)
+    end
+end
+
+-- ══════════════════════════════════════════════════════════════════
+-- 8. 目标选择 (源码还原: 击杀数越少越优先)
+-- ══════════════════════════════════════════════════════════════════
+local function BestTarget(MaxDistance)
+    local Target = nil
+    MaxDistance = MaxDistance or math.huge
+    local MaxKills = math.huge
     local myRoot = getRoot()
-    if not targetHRP or not myRoot then return end
-    local predictedPos = targetHRP.Position + targetHRP.Velocity * 0.2
-    local direction = (predictedPos - myRoot.Position).Unit
+    if not myRoot then return nil end
+    for _, v in ipairs(Players:GetPlayers()) do
+        if v ~= LocalPlayer then
+            local vChar = v.Character
+            if vChar then
+                local vHum = vChar:FindFirstChildOfClass("Humanoid")
+                local vHRP = vChar:FindFirstChild("HumanoidRootPart")
+                if vHum and vHRP and vHum.Health > 0 then
+                    local myHum = getHum()
+                    if myHum then
+                        local Distance = (myRoot.Position - vHRP.Position).Magnitude
+                        local kills = v:GetAttribute("Kills") or 0
+                        if Distance < MaxDistance and kills < MaxKills then
+                            MaxDistance = Distance
+                            Target = v
+                            MaxKills = kills
+                        end
+                    end
+                end
+            end
+        end
+    end
+    return Target
+end
+
+local function FaceTarget(target)
+    if not target or not target.Character then return end
+    local tHRP = target.Character:FindFirstChild("HumanoidRootPart")
+    local myRoot = getRoot()
+    if not tHRP or not myRoot then return end
+    local predicted = tHRP.Position + tHRP.Velocity * 0.2
+    local dir = (predicted - myRoot.Position).Unit
     pcall(function()
-        myRoot.CFrame = CFrame.new(myRoot.Position, myRoot.Position + direction)
+        myRoot.CFrame = CFrame.new(myRoot.Position, myRoot.Position + dir)
     end)
 end
 
+local function TeleportToPlayer(player, offset, method)
+    local character = player.Character
+    if not character or not character:FindFirstChild("HumanoidRootPart") then return end
+    local myRoot = getRoot()
+    if not myRoot then return end
+    if offset == nil then
+        pcall(function()
+            LocalPlayer.Character:SetPrimaryPartCFrame(character.HumanoidRootPart.CFrame)
+        end)
+    elseif offset == true then
+        if method == "Behind" then
+            pcall(function()
+                LocalPlayer.Character:SetPrimaryPartCFrame(
+                    CFrame.new(player.Character.HumanoidRootPart.Position - Vector3.new(0, 3, 0) + player.Character.Head.CFrame.lookVector * -5)
+                )
+            end)
+        elseif method == "Above" then
+            pcall(function()
+                myRoot.CFrame = CFrame.new(player.Character.HumanoidRootPart.Position + Vector3.new(0, 5, 0))
+            end)
+        else
+            pcall(function()
+                LocalPlayer.Character:SetPrimaryPartCFrame(character.HumanoidRootPart.CFrame)
+            end)
+        end
+    end
+end
+
 -- ══════════════════════════════════════════════════════════════════
--- 7. 战斗功能 (源码还原)
+-- 9. 战斗功能 (源码还原)
 -- ══════════════════════════════════════════════════════════════════
 
--- Kill Aura (来自源码: 对范围内所有敌人自动攻击)
-local function toggleKillAura(enabled)
-    if killAuraConn then
-        killAuraConn:Disconnect()
-        killAuraConn = nil
-    end
+-- Attack Aura: 范围内自动出招 (随机技能, 无技能则 M1)
+local function toggleAttackAura(enabled)
+    if auraConn then auraConn:Disconnect() auraConn = nil end
     if enabled then
-        killAuraConn = RunService.Heartbeat:Connect(function()
+        auraConn = RunService.RenderStepped:Connect(function()
             if isDestroyed then return end
-            local myRoot = getRoot()
-            if not myRoot then return end
-            local range = SETTINGS.TSB_KillAuraRange or 15
-            local enemies = getAllEnemiesInRange(range)
-            for _, enemy in ipairs(enemies) do
-                pcall(function()
-                    faceTarget(enemy)
-                    -- 模拟M1点击
-                    if VirtualUser then
-                        VirtualUser:CaptureController()
-                        VirtualUser:ClickButton1(Vector2.new())
-                    end
-                end)
+            local target = BestTarget(SETTINGS.TSB_AuraRange or 5)
+            if target then
+                FaceTarget(target)
+                local ability = RandomAbility()
+                if ability then
+                    UseAbility(ability)
+                else
+                    Hit(true)
+                end
             end
         end)
     end
 end
 
--- Hitbox Expander (来自源码: 放大敌人碰撞箱)
-local function toggleHitboxExpander(enabled)
+-- Auto Combo: 依次释放所有可用技能 + 终极
+local function toggleAutoCombo(enabled)
+    if comboConn then comboConn:Disconnect() comboConn = nil end
     if enabled then
-        local conn = RunService.Heartbeat:Connect(function()
+        comboConn = RunService.RenderStepped:Connect(function()
             if isDestroyed then return end
-            for _, player in ipairs(Players:GetPlayers()) do
-                if player ~= LocalPlayer and player.Character then
-                    local hrp = player.Character:FindFirstChild("HumanoidRootPart")
-                    if hrp then
-                        pcall(function()
-                            hrp.Size = Vector3.new(SETTINGS.TSB_HitboxSize, SETTINGS.TSB_HitboxSize, SETTINGS.TSB_HitboxSize)
-                            hrp.Transparency = 0.5
-                            hrp.CanCollide = false
-                            hrp.Material = Enum.Material.Neon
-                            hrp.Color = Color3.fromRGB(255, 0, 0)
-                        end)
-                    end
-                end
+            local target = BestTarget(SETTINGS.TSB_AuraRange or 5)
+            if not target then return end
+            FaceTarget(target)
+            if SETTINGS.TSB_AutoUltimate then
+                local ult = LocalPlayer:GetAttribute("Ultimate") or 0
+                if ult >= 100 then ActivateUltimate() end
+            end
+            local abils = GetAllReadyAbilities()
+            if #abils > 0 then
+                UseAbility(abils[1])
+            else
+                Hit(true)
             end
         end)
-        -- 存储conn以便关闭
-        _G.TSB_HitboxConn = conn
-    else
-        if _G.TSB_HitboxConn then
-            _G.TSB_HitboxConn:Disconnect()
-            _G.TSB_HitboxConn = nil
-        end
-        -- 恢复原始大小
-        for _, player in ipairs(Players:GetPlayers()) do
-            if player ~= LocalPlayer and player.Character then
-                local hrp = player.Character:FindFirstChild("HumanoidRootPart")
-                if hrp then
-                    pcall(function()
-                        hrp.Size = Vector3.new(2, 2, 1)
-                        hrp.Transparency = 1
-                        hrp.Material = Enum.Material.Plastic
-                    end)
-                end
-            end
-        end
     end
 end
 
--- Auto Block (源码还原: TSB官方格挡键=F 按住持续格挡)
+-- Auto Block: 附近敌人面向自己时按住 F 格挡
 local vim = game:GetService("VirtualInputManager")
-local blockHeld = false  -- F键当前是否处于按下状态
-
 local function pressBlock(hold)
     if blockHeld == hold then return end
     blockHeld = hold
     pcall(function()
-        -- 优先使用执行器的 keypress/keyrelease，更可靠
         if hold then
             if keypress then keypress(Enum.KeyCode.F) return end
             if vim then vim:SendKeyEvent(true, Enum.KeyCode.F, false, game) end
@@ -348,20 +423,13 @@ local function pressBlock(hold)
 end
 
 local function toggleAutoBlock(enabled)
-    if autoBlockConn then
-        autoBlockConn:Disconnect()
-        autoBlockConn = nil
-    end
-    if not enabled then
-        pressBlock(false)  -- 关闭时确保松开F
-        return
-    end
-    autoBlockConn = RunService.Heartbeat:Connect(function()
-        if isDestroyed then return end
+    if blockConn then blockConn:Disconnect() blockConn = nil end
+    if not enabled then pressBlock(false) return end
+    blockConn = RunService.Heartbeat:Connect(function()
+        if isDestroyed then pressBlock(false) return end
         local myRoot = getRoot()
         if not myRoot then pressBlock(false) return end
         local needBlock = false
-        -- 遍历12stud内的敌人，只要有一个面朝自己就需要格挡
         for _, player in ipairs(Players:GetPlayers()) do
             if player ~= LocalPlayer and player.Character then
                 local hrp = player.Character:FindFirstChild("HumanoidRootPart")
@@ -369,10 +437,8 @@ local function toggleAutoBlock(enabled)
                 if hrp and hum and hum.Health > 0 then
                     local dist = (myRoot.Position - hrp.Position).Magnitude
                     if dist <= 12 then
-                        local direction = (myRoot.Position - hrp.Position).Unit
-                        local enemyLook = hrp.CFrame.LookVector
-                        local dot = direction:Dot(enemyLook)
-                        -- 敌人LookVector与"指向我"的方向夹角 < 45°，视为盯着我
+                        local dir = (myRoot.Position - hrp.Position).Unit
+                        local dot = dir:Dot(hrp.CFrame.LookVector)
                         if dot > 0.7 then
                             needBlock = true
                             break
@@ -385,122 +451,88 @@ local function toggleAutoBlock(enabled)
     end)
 end
 
--- Auto Attack (来自源码: 自动攻击最近敌人)
-local function toggleAutoAttack(enabled)
-    if autoAttackConn then
-        autoAttackConn:Disconnect()
-        autoAttackConn = nil
-    end
+-- ══════════════════════════════════════════════════════════════════
+-- 10. 农场功能 (源码还原)
+-- ══════════════════════════════════════════════════════════════════
+local function toggleKillFarm(enabled)
+    if farmConn then farmConn:Disconnect() farmConn = nil end
     if enabled then
-        local lastAttack = 0
-        autoAttackConn = RunService.Heartbeat:Connect(function()
+        farmConn = RunService.RenderStepped:Connect(function()
             if isDestroyed then return end
-            local now = tick()
-            if now - lastAttack < 0.5 then return end
-            local target = getClosestEnemy(20)
+            local hum = getHum()
+            if not hum then return end
+
+            -- 低血量自动重置
+            if SETTINGS.TSB_AutoReset and hum.Health > 0 then
+                local hpPercent = (hum.Health / hum.MaxHealth) * 100
+                if hpPercent <= (SETTINGS.TSB_AutoResetHP or 20) then
+                    pcall(function() hum.Health = 0 end)
+                    task.wait(2)
+                    return
+                end
+            end
+
+            -- 自动终极
+            if SETTINGS.TSB_AutoUltimate then
+                local ult = LocalPlayer:GetAttribute("Ultimate") or 0
+                if ult >= 100 then ActivateUltimate() end
+            end
+
+            local target = BestTarget()
             if target then
-                faceTarget(target)
+                TeleportToPlayer(target)
+                FaceTarget(target)
+                local ability = RandomAbility()
+                if ability then
+                    UseAbility(ability)
+                else
+                    Hit(true)
+                end
+            end
+        end)
+    end
+end
+
+-- ══════════════════════════════════════════════════════════════════
+-- 11. 移动功能
+-- ══════════════════════════════════════════════════════════════════
+local function toggleWalkSpeed(enabled)
+    if walkConn then walkConn:Disconnect() walkConn = nil end
+    if enabled then
+        walkConn = RunService.Heartbeat:Connect(function()
+            if isDestroyed then return end
+            local hum = getHum()
+            if hum and hum.Health > 0 then
+                pcall(function() hum.WalkSpeed = SETTINGS.TSB_WalkSpeedValue end)
+            end
+        end)
+    else
+        local hum = getHum()
+        if hum then pcall(function() hum.WalkSpeed = 16 end) end
+    end
+end
+
+local function toggleJumpPower(enabled)
+    if jumpConn then jumpConn:Disconnect() jumpConn = nil end
+    if enabled then
+        jumpConn = RunService.Heartbeat:Connect(function()
+            if isDestroyed then return end
+            local hum = getHum()
+            if hum and hum.Health > 0 then
                 pcall(function()
-                    if VirtualUser then
-                        VirtualUser:CaptureController()
-                        VirtualUser:ClickButton1(Vector2.new())
-                    end
+                    hum.UseJumpPower = true
+                    hum.JumpPower = SETTINGS.TSB_JumpPowerValue
                 end)
-                lastAttack = now
             end
         end)
+    else
+        local hum = getHum()
+        if hum then pcall(function() hum.JumpPower = 50 end) end
     end
-end
-
--- No Cooldown (来自源码: 移除技能冷却)
-local function toggleNoCooldown(enabled)
-    if noCooldownConn then
-        noCooldownConn:Disconnect()
-        noCooldownConn = nil
-    end
-    if enabled then
-        noCooldownConn = RunService.Heartbeat:Connect(function()
-            if isDestroyed then return end
-            -- 尝试找到并修改冷却值
-            pcall(function()
-                local char = getChar()
-                if char then
-                    -- 搜索技能相关的Cooldown值
-                    for _, v in ipairs(char:GetDescendants()) do
-                        if v:IsA("NumberValue") and (string.find(string.lower(v.Name), "cooldown") or string.find(string.lower(v.Name), "cd")) then
-                            v.Value = 0
-                        end
-                        if v:IsA("IntValue") and (string.find(string.lower(v.Name), "cooldown") or string.find(string.lower(v.Name), "cd")) then
-                            v.Value = 0
-                        end
-                    end
-                end
-                -- 搜索ReplicatedStorage中的技能配置
-                local skills = ReplicatedStorage:FindFirstChild("Skills") or ReplicatedStorage:FindFirstChild("Moves")
-                if skills then
-                    for _, v in ipairs(skills:GetDescendants()) do
-                        if v:IsA("NumberValue") and (string.find(string.lower(v.Name), "cooldown") or string.find(string.lower(v.Name), "cd")) then
-                            v.Value = 0
-                        end
-                    end
-                end
-            end)
-        end)
-    end
-end
-
--- Aimbot (来自源码: 锁定最近敌人到鼠标)
-local function toggleAimbot(enabled)
-    if aimbotConn then
-        aimbotConn:Disconnect()
-        aimbotConn = nil
-    end
-    if enabled then
-        aimbotConn = RunService.RenderStepped:Connect(function()
-            if isDestroyed then return end
-            local cam = Workspace.CurrentCamera
-            if not cam then return end
-            local target = getClosestEnemy(SETTINGS.TSB_AimbotRange or 100)
-            if target and target.Character then
-                local hrp = target.Character:FindFirstChild("HumanoidRootPart")
-                if hrp then
-                    pcall(function()
-                        -- 将相机对准目标
-                        local myRoot = getRoot()
-                        if myRoot then
-                            local direction = (hrp.Position - myRoot.Position).Unit
-                            myRoot.CFrame = CFrame.new(myRoot.Position, myRoot.Position + direction)
-                        end
-                    end)
-                end
-            end
-        end)
-    end
-end
-
--- ══════════════════════════════════════════════════════════════════
--- 8. 移动功能 (源码还原)
--- ══════════════════════════════════════════════════════════════════
-local function setWalkSpeed(enabled, value)
-    local hum = getHum()
-    if not hum then return end
-    pcall(function() hum.WalkSpeed = enabled and value or 16 end)
-end
-
-local function setJumpPower(enabled, value)
-    local hum = getHum()
-    if not hum then return end
-    pcall(function()
-        hum.JumpPower = enabled and value or 50
-        hum.UseJumpPower = true
-    end)
 end
 
 local function toggleInfJump(enabled)
-    if infJumpConn then
-        infJumpConn:Disconnect()
-        infJumpConn = nil
-    end
+    if infJumpConn then infJumpConn:Disconnect() infJumpConn = nil end
     if enabled then
         infJumpConn = UserInputService.UserJumpRequest:Connect(function()
             local hum = getHum()
@@ -510,16 +542,13 @@ local function toggleInfJump(enabled)
 end
 
 local function toggleNoclip(enabled)
-    if noclipConn then
-        noclipConn:Disconnect()
-        noclipConn = nil
-    end
+    if noclipConn then noclipConn:Disconnect() noclipConn = nil end
     if enabled then
         noclipConn = RunService.Stepped:Connect(function()
             if isDestroyed then return end
-            local char = getChar()
-            if not char then return end
-            for _, part in ipairs(char:GetChildren()) do
+            local c = getChar()
+            if not c then return end
+            for _, part in ipairs(c:GetChildren()) do
                 if part:IsA("BasePart") then
                     pcall(function() part.CanCollide = false end)
                 end
@@ -530,8 +559,8 @@ end
 
 local function toggleFly(enabled, speed)
     if flyConn then flyConn:Disconnect() flyConn = nil end
-    if flyBV then flyBV:Destroy() flyBV = nil end
-    if flyBG then flyBG:Destroy() flyBG = nil end
+    if flyBV then pcall(function() flyBV:Destroy() end) flyBV = nil end
+    if flyBG then pcall(function() flyBG:Destroy() end) flyBG = nil end
     if enabled then
         local root = getRoot()
         if not root then return end
@@ -558,17 +587,14 @@ local function toggleFly(enabled, speed)
             local spd = speed or SETTINGS.TSB_FlySpeed or 80
             if move.Magnitude > 0 then move = move.Unit * spd end
             flyBV.Velocity = move
-            if root then flyBG.CFrame = CFrame.new(root.Position) * cam.CFrame.Rotation end
+            local r = getRoot()
+            if r then flyBG.CFrame = CFrame.new(r.Position) * cam.CFrame.Rotation end
         end)
     end
 end
 
--- No Stun (来自源码: 防止眩晕状态)
 local function toggleNoStun(enabled)
-    if noStunConn then
-        noStunConn:Disconnect()
-        noStunConn = nil
-    end
+    if noStunConn then noStunConn:Disconnect() noStunConn = nil end
     if enabled then
         noStunConn = RunService.Heartbeat:Connect(function()
             if isDestroyed then return end
@@ -584,12 +610,8 @@ local function toggleNoStun(enabled)
     end
 end
 
--- No Ragdoll (来自源码: 防止布娃娃状态)
 local function toggleNoRagdoll(enabled)
-    if noRagdollConn then
-        noRagdollConn:Disconnect()
-        noRagdollConn = nil
-    end
+    if noRagdollConn then noRagdollConn:Disconnect() noRagdollConn = nil end
     if enabled then
         noRagdollConn = RunService.Heartbeat:Connect(function()
             if isDestroyed then return end
@@ -608,19 +630,15 @@ local function toggleNoRagdoll(enabled)
     end
 end
 
--- No Dash Cooldown (来自源码: 移除冲刺冷却)
 local function toggleNoDashCooldown(enabled)
-    if noDashConn then
-        noDashConn:Disconnect()
-        noDashConn = nil
-    end
+    if noDashConn then noDashConn:Disconnect() noDashConn = nil end
     if enabled then
         noDashConn = RunService.Heartbeat:Connect(function()
             if isDestroyed then return end
             pcall(function()
-                local char = getChar()
-                if char then
-                    for _, v in ipairs(char:GetDescendants()) do
+                local c = getChar()
+                if c then
+                    for _, v in ipairs(c:GetDescendants()) do
                         local name = string.lower(v.Name)
                         if (v:IsA("NumberValue") or v:IsA("IntValue")) and string.find(name, "dash") then
                             v.Value = 0
@@ -636,7 +654,7 @@ local function toggleNoDashCooldown(enabled)
 end
 
 -- ══════════════════════════════════════════════════════════════════
--- 9. ESP 功能 (源码还原)
+-- 12. ESP 功能
 -- ══════════════════════════════════════════════════════════════════
 local function clearESP()
     if espFolder then
@@ -660,12 +678,11 @@ end
 local function createBillboard(parent, text, color, yOffset)
     local bb = Instance.new("BillboardGui")
     bb.Name = "TSB_ESP_BB"
-    bb.Size = UDim2.new(0, 200, 0, 50)
+    bb.Size = UDim2.new(0, 200, 0, 26)
     bb.StudsOffset = Vector3.new(0, yOffset or 3, 0)
     bb.AlwaysOnTop = true
-
     local tl = Instance.new("TextLabel")
-    tl.Size = UDim2.new(1, 0, 0, 20)
+    tl.Size = UDim2.new(1, 0, 1, 0)
     tl.BackgroundTransparency = 1
     tl.Text = text
     tl.TextColor3 = color
@@ -674,24 +691,8 @@ local function createBillboard(parent, text, color, yOffset)
     tl.Font = Enum.Font.GothamBold
     tl.TextSize = 14
     tl.Parent = bb
-
-    -- 血量条
-    local barBg = Instance.new("Frame")
-    barBg.Size = UDim2.new(0.8, 0, 0, 6)
-    barBg.Position = UDim2.new(0.1, 0, 0, 22)
-    barBg.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
-    barBg.BorderSizePixel = 0
-    barBg.Parent = bb
-
-    local bar = Instance.new("Frame")
-    bar.Name = "HealthBar"
-    bar.Size = UDim2.new(1, 0, 1, 0)
-    bar.BackgroundColor3 = Color3.fromRGB(0, 255, 0)
-    bar.BorderSizePixel = 0
-    bar.Parent = barBg
-
     bb.Parent = parent
-    return bb, bar
+    return bb
 end
 
 local function runESPLoop()
@@ -700,7 +701,6 @@ local function runESPLoop()
         espFolder.Name = "TSB_ESP_Folder"
         espFolder.Parent = CoreGui
     end
-
     local myRoot = getRoot()
 
     local function cleanObj(obj)
@@ -713,7 +713,7 @@ local function runESPLoop()
         end)
     end
 
-    if SETTINGS.ESP_Player or SETTINGS.ESP_Health or SETTINGS.ESP_Tracers then
+    if SETTINGS.ESP_Player or SETTINGS.ESP_Health or SETTINGS.ESP_Distance then
         for _, p in ipairs(Players:GetPlayers()) do
             if p ~= LocalPlayer and p.Character then
                 local char = p.Character
@@ -729,26 +729,14 @@ local function runESPLoop()
                     end
                     local hpText = ""
                     if SETTINGS.ESP_Health then
-                        hpText = string.format(" HP:%d/%d", math.floor(hum.Health), math.floor(hum.MaxHealth))
+                        hpText = string.format(" HP:%d", math.floor(hum.Health))
                     end
                     local name = p.Name .. hpText
                     if SETTINGS.ESP_Distance then name = name .. distText end
                     if SETTINGS.ESP_Player or SETTINGS.ESP_Health then
                         pcall(function()
                             createHighlight(char, color)
-                            local _, bar = createBillboard(char, name, color, 4)
-                            if bar and hum then
-                                local hpPercent = hum.Health / hum.MaxHealth
-                                bar.Size = UDim2.new(math.clamp(hpPercent, 0, 1), 0, 1, 0)
-                                -- 血量颜色: 绿→黄→红
-                                if hpPercent > 0.5 then
-                                    bar.BackgroundColor3 = Color3.fromRGB(0, 255, 0)
-                                elseif hpPercent > 0.25 then
-                                    bar.BackgroundColor3 = Color3.fromRGB(255, 255, 0)
-                                else
-                                    bar.BackgroundColor3 = Color3.fromRGB(255, 0, 0)
-                                end
-                            end
+                            createBillboard(char, name, color, 4)
                         end)
                     end
                 end
@@ -758,10 +746,7 @@ local function runESPLoop()
 end
 
 local function toggleESP(enabled)
-    if espConn then
-        espConn:Disconnect()
-        espConn = nil
-    end
+    if espConn then espConn:Disconnect() espConn = nil end
     if enabled then
         local lastRefresh = 0
         espConn = RunService.RenderStepped:Connect(function()
@@ -778,7 +763,7 @@ local function toggleESP(enabled)
 end
 
 -- ══════════════════════════════════════════════════════════════════
--- 10. 视觉功能 (源码还原)
+-- 13. 视觉功能
 -- ══════════════════════════════════════════════════════════════════
 local function toggleFullbright(enabled)
     if enabled then
@@ -801,64 +786,7 @@ local function toggleFullbright(enabled)
 end
 
 -- ══════════════════════════════════════════════════════════════════
--- 11. 农场功能 (源码还原)
--- ══════════════════════════════════════════════════════════════════
-
--- Auto Farm (来自源码: 自动找敌+攻击+防死)
-local function toggleAutoFarm(enabled)
-    if farmConn then
-        farmConn:Disconnect()
-        farmConn = nil
-    end
-    if enabled then
-        farmConn = RunService.Heartbeat:Connect(function()
-            if isDestroyed then return end
-            local myRoot = getRoot()
-            local hum = getHum()
-            if not myRoot or not hum then return end
-
-            -- 低血量自动重置
-            if SETTINGS.TSB_AutoReset and hum.Health > 0 then
-                local hpPercent = (hum.Health / hum.MaxHealth) * 100
-                if hpPercent <= (SETTINGS.TSB_AutoResetHP or 20) then
-                    pcall(function()
-                        hum.Health = 0
-                    end)
-                    task.wait(2)
-                    return
-                end
-            end
-
-            -- 找最近敌人
-            local target = getClosestEnemy(100)
-            if target and target.Character then
-                local targetHRP = target.Character:FindFirstChild("HumanoidRootPart")
-                local targetHum = target.Character:FindFirstChildOfClass("Humanoid")
-                if targetHRP and targetHum and targetHum.Health > 0 then
-                    local dist = (myRoot.Position - targetHRP.Position).Magnitude
-                    if dist > 8 then
-                        -- 传送到敌人附近
-                        pcall(function()
-                            myRoot.CFrame = CFrame.new(targetHRP.Position + targetHRP.CFrame.LookVector * 4)
-                        end)
-                    else
-                        -- 攻击
-                        faceTarget(target)
-                        pcall(function()
-                            if VirtualUser then
-                                VirtualUser:CaptureController()
-                                VirtualUser:ClickButton1(Vector2.new())
-                            end
-                        end)
-                    end
-                end
-            end
-        end)
-    end
-end
-
--- ══════════════════════════════════════════════════════════════════
--- 12. 杂项
+-- 14. 杂项
 -- ══════════════════════════════════════════════════════════════════
 local function rejoin()
     pcall(function()
@@ -895,11 +823,11 @@ local function setupAntiAFK()
 end
 
 -- ══════════════════════════════════════════════════════════════════
--- 13. 创建 UI
+-- 15. 创建 UI
 -- ══════════════════════════════════════════════════════════════════
 Window = QuantumUI.new({
     Title      = "The Strongest Battlegrounds",
-    Subtitle   = "最强战场 v1.0",
+    Subtitle   = "最强战场 v2.0",
     ThemeColor = Color3.fromRGB(255, 80, 80),
     Transparency = 0.3,
     Size       = UDim2.new(0, 640, 0, 560),
@@ -910,6 +838,9 @@ _G.QuantumUI_Window = Window
 
 task.wait(3.5)
 
+-- 确保 Humanoid 就绪
+Humanoid = getHum()
+
 -- ── TAB 1: 战斗 ──
 local CombatTab = Window:AddTab({
     Name = "战斗",
@@ -919,50 +850,39 @@ local CombatTab = Window:AddTab({
 CombatTab:AddSection({ Name = "攻击" })
 
 CombatTab:AddToggle({
-    Name     = "Kill Aura (范围自动攻击)",
+    Name     = "Attack Aura (范围内自动出招)",
     Default  = false,
-    Flag     = "TSB_KillAura",
+    Flag     = "TSB_AttackAura",
     Callback = function(s)
-        SETTINGS.TSB_KillAura = s
-        toggleKillAura(s)
-        notify("TSB", s and "Kill Aura 已开启" or "Kill Aura 已关闭", 2, s and "Success" or "Info")
+        SETTINGS.TSB_AttackAura = s
+        toggleAttackAura(s)
+        notify("TSB", s and "Attack Aura 已开启" or "Attack Aura 已关闭", 2, s and "Success" or "Info")
     end,
 })
 
 CombatTab:AddSlider({
-    Name      = "Kill Aura 范围",
-    Min       = 5, Max = 50, Default = 15, Increment = 1,
+    Name      = "Attack Aura 范围",
+    Min       = 3, Max = 30, Default = 5, Increment = 1,
     Suffix    = " studs",
-    Flag      = "TSB_KillAuraRange",
-    Callback  = function(v) SETTINGS.TSB_KillAuraRange = v end,
+    Flag      = "TSB_AuraRange",
+    Callback  = function(v) SETTINGS.TSB_AuraRange = v end,
 })
 
 CombatTab:AddToggle({
-    Name     = "Auto Attack (自动攻击最近敌人)",
+    Name     = "Auto Combo (自动连招+终极)",
     Default  = false,
-    Flag     = "TSB_AutoAttack",
+    Flag     = "TSB_AutoCombo",
     Callback = function(s)
-        SETTINGS.TSB_AutoAttack = s
-        toggleAutoAttack(s)
+        SETTINGS.TSB_AutoCombo = s
+        toggleAutoCombo(s)
     end,
 })
 
 CombatTab:AddToggle({
-    Name     = "Aimbot (自动锁定)",
+    Name     = "Auto Ultimate (终极条满自动开)",
     Default  = false,
-    Flag     = "TSB_Aimbot",
-    Callback = function(s)
-        SETTINGS.TSB_Aimbot = s
-        toggleAimbot(s)
-    end,
-})
-
-CombatTab:AddSlider({
-    Name      = "Aimbot 范围",
-    Min       = 20, Max = 500, Default = 100, Increment = 10,
-    Suffix    = " studs",
-    Flag      = "TSB_AimbotRange",
-    Callback  = function(v) SETTINGS.TSB_AimbotRange = v end,
+    Flag     = "TSB_AutoUltimate",
+    Callback = function(s) SETTINGS.TSB_AutoUltimate = s end,
 })
 
 CombatTab:AddSection({ Name = "防御" })
@@ -977,36 +897,43 @@ CombatTab:AddToggle({
     end,
 })
 
-CombatTab:AddSection({ Name = "修改" })
+-- ── TAB 2: 农场 ──
+local FarmTab = Window:AddTab({
+    Name = "农场",
+    Icon = "rbxassetid://6031280882",
+})
 
-CombatTab:AddToggle({
-    Name     = "Hitbox Expander (放大碰撞箱)",
+FarmTab:AddSection({ Name = "自动农场" })
+
+FarmTab:AddToggle({
+    Name     = "Kill Farm (传送+攻击+自动终极)",
     Default  = false,
-    Flag     = "TSB_HitboxExpander",
+    Flag     = "TSB_KillFarm",
     Callback = function(s)
-        SETTINGS.TSB_HitboxExpander = s
-        toggleHitboxExpander(s)
+        SETTINGS.TSB_KillFarm = s
+        toggleKillFarm(s)
+        notify("TSB", s and "Kill Farm 已开启" or "Kill Farm 已关闭", 2, s and "Success" or "Info")
     end,
 })
 
-CombatTab:AddSlider({
-    Name      = "Hitbox 大小",
-    Min       = 2, Max = 50, Default = 10, Increment = 1,
-    Flag      = "TSB_HitboxSize",
-    Callback  = function(v) SETTINGS.TSB_HitboxSize = v end,
-})
+FarmTab:AddSection({ Name = "自动重置" })
 
-CombatTab:AddToggle({
-    Name     = "No Cooldown (无冷却)",
+FarmTab:AddToggle({
+    Name     = "Auto Reset (低血量自动重置)",
     Default  = false,
-    Flag     = "TSB_NoCooldown",
-    Callback = function(s)
-        SETTINGS.TSB_NoCooldown = s
-        toggleNoCooldown(s)
-    end,
+    Flag     = "TSB_AutoReset",
+    Callback = function(s) SETTINGS.TSB_AutoReset = s end,
 })
 
--- ── TAB 2: 移动 ──
+FarmTab:AddSlider({
+    Name      = "重置血量阈值",
+    Min       = 5, Max = 80, Default = 20, Increment = 5,
+    Suffix    = "%",
+    Flag      = "TSB_AutoResetHP",
+    Callback  = function(v) SETTINGS.TSB_AutoResetHP = v end,
+})
+
+-- ── TAB 3: 移动 ──
 local MoveTab = Window:AddTab({
     Name = "移动",
     Icon = "rbxassetid://6034466796",
@@ -1017,10 +944,10 @@ MoveTab:AddSection({ Name = "基础移动" })
 MoveTab:AddToggle({
     Name     = "WalkSpeed",
     Default  = false,
-    Flag     = "TSB_WalkSpeedEnabled",
+    Flag     = "TSB_WalkSpeed",
     Callback = function(s)
         SETTINGS.TSB_WalkSpeed = s
-        setWalkSpeed(s, SETTINGS.TSB_WalkSpeedValue)
+        toggleWalkSpeed(s)
     end,
 })
 
@@ -1030,17 +957,17 @@ MoveTab:AddSlider({
     Flag      = "TSB_WalkSpeedValue",
     Callback  = function(v)
         SETTINGS.TSB_WalkSpeedValue = v
-        if SETTINGS.TSB_WalkSpeed then setWalkSpeed(true, v) end
+        if SETTINGS.TSB_WalkSpeed then toggleWalkSpeed(true) end
     end,
 })
 
 MoveTab:AddToggle({
     Name     = "JumpPower",
     Default  = false,
-    Flag     = "TSB_JumpPowerEnabled",
+    Flag     = "TSB_JumpPower",
     Callback = function(s)
         SETTINGS.TSB_JumpPower = s
-        setJumpPower(s, SETTINGS.TSB_JumpPowerValue)
+        toggleJumpPower(s)
     end,
 })
 
@@ -1050,7 +977,7 @@ MoveTab:AddSlider({
     Flag      = "TSB_JumpPowerValue",
     Callback  = function(v)
         SETTINGS.TSB_JumpPowerValue = v
-        if SETTINGS.TSB_JumpPower then setJumpPower(true, v) end
+        if SETTINGS.TSB_JumpPower then toggleJumpPower(true) end
     end,
 })
 
@@ -1096,7 +1023,7 @@ MoveTab:AddSlider({
     end,
 })
 
-MoveTab:AddSection({ Name = "状态防抗 (源码还原)" })
+MoveTab:AddSection({ Name = "状态防抗" })
 
 MoveTab:AddToggle({
     Name     = "No Stun (防眩晕)",
@@ -1128,7 +1055,7 @@ MoveTab:AddToggle({
     end,
 })
 
--- ── TAB 3: 视觉 ──
+-- ── TAB 4: 视觉 ──
 local VisualTab = Window:AddTab({
     Name = "视觉",
     Icon = "rbxassetid://6035153470",
@@ -1142,17 +1069,17 @@ VisualTab:AddToggle({
     Flag     = "TSB_ESPPlayer",
     Callback = function(s)
         SETTINGS.ESP_Player = s
-        toggleESP(s or SETTINGS.ESP_Health or SETTINGS.ESP_Tracers)
+        toggleESP(s or SETTINGS.ESP_Health)
     end,
 })
 
 VisualTab:AddToggle({
-    Name     = "血量 ESP (血量条+数字)",
+    Name     = "血量 ESP",
     Default  = false,
     Flag     = "TSB_ESPHealth",
     Callback = function(s)
         SETTINGS.ESP_Health = s
-        toggleESP(s or SETTINGS.ESP_Player or SETTINGS.ESP_Tracers)
+        toggleESP(s or SETTINGS.ESP_Player)
     end,
 })
 
@@ -1185,44 +1112,6 @@ VisualTab:AddToggle({
         SETTINGS.TSB_Fullbright = s
         toggleFullbright(s)
     end,
-})
-
--- ── TAB 4: 农场 ──
-local FarmTab = Window:AddTab({
-    Name = "农场",
-    Icon = "rbxassetid://6031280882",
-})
-
-FarmTab:AddSection({ Name = "自动农场" })
-
-FarmTab:AddToggle({
-    Name     = "Auto Farm (自动找敌+攻击)",
-    Default  = false,
-    Flag     = "TSB_AutoFarm",
-    Callback = function(s)
-        SETTINGS.TSB_AutoFarm = s
-        toggleAutoFarm(s)
-        notify("TSB", s and "Auto Farm 已开启" or "Auto Farm 已关闭", 2, s and "Success" or "Info")
-    end,
-})
-
-FarmTab:AddSection({ Name = "自动重置" })
-
-FarmTab:AddToggle({
-    Name     = "Auto Reset (低血量自动重置)",
-    Default  = false,
-    Flag     = "TSB_AutoReset",
-    Callback = function(s)
-        SETTINGS.TSB_AutoReset = s
-    end,
-})
-
-FarmTab:AddSlider({
-    Name      = "重置血量阈值",
-    Min       = 5, Max = 80, Default = 20, Increment = 5,
-    Suffix    = "%",
-    Flag      = "TSB_AutoResetHP",
-    Callback  = function(v) SETTINGS.TSB_AutoResetHP = v end,
 })
 
 -- ── TAB 5: 服务器 ──
@@ -1299,34 +1188,31 @@ MiscTab:AddButton({
 MiscTab:AddSection({ Name = "信息" })
 
 MiscTab:AddParagraph({
-    Title   = "The Strongest Battlegrounds v1.1",
+    Title   = "The Strongest Battlegrounds v2.0",
     Content = table.concat({
-        "基于真实源码还原 (Spectral_Hub + Antimony + Speed Hub X)",
+        "基于 NexamTSB 真实源码结构重写",
         "PlaceId: 10449761463   GameId: 3808081382",
         "",
-        "TSB 官方控制 (来自游戏描述):",
-        "  G — Ultimate (觉醒/终极模式)",
-        "  F — Block (按住持续格挡) — Auto Block 会自动按 F",
-        "  Q — Dash (冲刺)  |  Ragdoll中按Q=Cancel翻滚取消",
-        "  连按W两次 — Run (奔跑)",
-        "  鼠标左键 — Punch (拳击/M1)",
-        "  B — Emote Wheel (表情轮盘)",
+        "TSB 官方控制 (来自源码):",
+        "  Communicate:FireServer 为唯一技能/操作入口",
+        "  G — Ultimate (终极/觉醒)  |  F — Block (格挡)",
+        "  Q — Dash (冲刺)  |  鼠标左键 — M1 (普攻)",
         "",
-        "源码分析:",
-        "  状态系统: Stunned / Ragdoll / Blocking",
-        "  评分公式: score = (100-HP) + Stunned/Ragdoll +500",
-        "  faceTarget 预测: targetHRP.Velocity * 0.2",
+        "v2.0 全新战斗核心:",
+        "  • Attack Aura: 用真实技能 (Console Move)",
+        "    而非模拟点击, 读取技能栏可用技能随机释放",
+        "  • Auto Combo: 依次释放所有可用技能 + 终极 (G)",
+        "  • Auto Ultimate: 监听 GetAttribute('Ultimate')",
+        "    满 100 自动按 G",
+        "  • Kill Farm: 传送 + 自动终极 + 自动攻击",
+        "  • 目标选择: 击杀数 (Kills) 越少越优先",
         "",
-        "功能:",
-        "  • Kill Aura (多因素优先级评分)",
-        "  • Hitbox Expander (碰撞箱扩大)",
-        "  • Auto Block (F键按住) + Auto Attack + Aimbot",
-        "  • No Cooldown + No Stun + No Ragdoll + No Dash CD",
-        "  • WalkSpeed/JumpPower/InfJump/NoClip/Fly",
-        "  • Player ESP + 血量条 (绿黄红) + 距离",
-        "  • Auto Farm (自动找敌+传送+攻击)",
-        "  • Auto Reset (低血量自动重置, 5-80%阈值)",
-        "  • Rejoin + Server Hop + Anti-AFK",
+        "功能总览:",
+        "  战斗: Attack Aura / Auto Combo / Auto Ultimate / Auto Block",
+        "  农场: Kill Farm / Auto Reset",
+        "  移动: WalkSpeed / JumpPower / InfJump / NoClip / Fly / 状态防抗",
+        "  视觉: 玩家ESP + 血量 + 距离 + 全亮",
+        "  服务器: Rejoin / Server Hop   杂项: Anti-AFK / 坐标",
         "",
         "脚本快捷键: T=传最近敌人  Y=NoClip  U=Fly  RightShift=UI",
     }, "\n"),
@@ -1336,16 +1222,10 @@ MiscTab:AddParagraph({
 local inputConn = UserInputService.InputBegan:Connect(function(input, processed)
     if processed then return end
     if input.KeyCode == Enum.KeyCode.T then
-        local target = getClosestEnemy(200)
-        if target and target.Character then
-            local targetHRP = target.Character:FindFirstChild("HumanoidRootPart")
-            local myRoot = getRoot()
-            if targetHRP and myRoot then
-                pcall(function()
-                    myRoot.CFrame = CFrame.new(targetHRP.Position + targetHRP.CFrame.LookVector * 4)
-                end)
-                notify("T 快捷键", "→ 传送到 " .. target.Name, 1.5, "Info")
-            end
+        local target = BestTarget(200)
+        if target then
+            TeleportToPlayer(target, true, "Behind")
+            notify("T 快捷键", "→ 传送到 " .. target.Name, 1.5, "Info")
         end
     elseif input.KeyCode == Enum.KeyCode.Y then
         local newState = not SETTINGS.TSB_NoClip
@@ -1364,14 +1244,15 @@ end)
 local charAddedConn = LocalPlayer.CharacterAdded:Connect(function()
     task.wait(0.5)
     if isDestroyed then return end
-    if SETTINGS.TSB_WalkSpeed then setWalkSpeed(true, SETTINGS.TSB_WalkSpeedValue) end
-    if SETTINGS.TSB_JumpPower then setJumpPower(true, SETTINGS.TSB_JumpPowerValue) end
+    Humanoid = getHum()
+    if SETTINGS.TSB_WalkSpeed then toggleWalkSpeed(true) end
+    if SETTINGS.TSB_JumpPower then toggleJumpPower(true) end
     if SETTINGS.TSB_NoClip then toggleNoclip(true) end
     if SETTINGS.TSB_Fly then toggleFly(true, SETTINGS.TSB_FlySpeed) end
 end)
 
 -- ══════════════════════════════════════════════════════════════════
--- 14. 清理
+-- 16. 清理
 -- ══════════════════════════════════════════════════════════════════
 local function cleanup()
     if isDestroyed then return end
@@ -1379,32 +1260,30 @@ local function cleanup()
 
     if inputConn then inputConn:Disconnect() end
     if charAddedConn then charAddedConn:Disconnect() end
-    if noclipConn then noclipConn:Disconnect() end
+    if auraConn then auraConn:Disconnect() end
+    if comboConn then comboConn:Disconnect() end
+    if blockConn then blockConn:Disconnect() end
+    if farmConn then farmConn:Disconnect() end
+    if espConn then espConn:Disconnect() end
+    if walkConn then walkConn:Disconnect() end
+    if jumpConn then jumpConn:Disconnect() end
     if infJumpConn then infJumpConn:Disconnect() end
+    if noclipConn then noclipConn:Disconnect() end
     if flyConn then flyConn:Disconnect() end
-    if killAuraConn then killAuraConn:Disconnect() end
-    if autoBlockConn then autoBlockConn:Disconnect() end
-    if autoAttackConn then autoAttackConn:Disconnect() end
     if noStunConn then noStunConn:Disconnect() end
     if noRagdollConn then noRagdollConn:Disconnect() end
     if noDashConn then noDashConn:Disconnect() end
-    if noCooldownConn then noCooldownConn:Disconnect() end
-    if espConn then espConn:Disconnect() end
-    if farmConn then farmConn:Disconnect() end
-    if aimbotConn then aimbotConn:Disconnect() end
     if antiAFKConn then antiAFKConn:Disconnect() end
-    if _G.TSB_HitboxConn then _G.TSB_HitboxConn:Disconnect() _G.TSB_HitboxConn = nil end
 
-    -- 清理时必须松开格挡F键，否则玩家会一直处于格挡状态
     pressBlock(false)
 
-    if flyBV then flyBV:Destroy() end
-    if flyBG then flyBG:Destroy() end
+    if flyBV then pcall(function() flyBV:Destroy() end) end
+    if flyBG then pcall(function() flyBG:Destroy() end) end
 
     clearESP()
     toggleFullbright(false)
-    setWalkSpeed(false, 16)
-    setJumpPower(false, 50)
+    local hum = getHum()
+    if hum then pcall(function() hum.WalkSpeed = 16; hum.JumpPower = 50 end) end
 
     if Window then
         pcall(function() Window:Destroy() end)
@@ -1422,6 +1301,6 @@ _G.TSB_Cleanup = cleanup
 
 -- ── 完成通知 ──
 task.wait(0.5)
-notify("TSB v1.0", "The Strongest Battlegrounds 辅助已加载\n基于真实源码还原\n按 RightShift 打开 UI", 5, "Success")
+notify("TSB v2.0", "The Strongest Battlegrounds 辅助已加载\n基于 NexamTSB 真实源码结构\n按 RightShift 打开 UI", 5, "Success")
 
-print(string.format("[TSB] v1.0 (PlaceId: %d) 辅助加载完成 — 基于真实源码还原", game.PlaceId))
+print(string.format("[TSB] v2.0 (PlaceId: %d) 辅助加载完成 — 基于 NexamTSB 真实结构还原", game.PlaceId))

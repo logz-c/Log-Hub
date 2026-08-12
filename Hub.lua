@@ -84,7 +84,7 @@ local GAME_REGISTRY = {
         PlaceIds = { 10449761463 },
         GameIds  = { 3808081382 },
         ScriptPath = "/Battlegrounds_QuantumUI.lua",
-        Description = "v1.1: 基于Spectral_Hub源码还原 — 修复AutoBlock使用F键(官方格挡) + GameId(3808081382)双重匹配 + Kill Aura多因素评分 + Hitbox + AutoAttack/Aimbot + NoCD + NoStun/Ragdoll/DashCD + WalkSpeed/JumpPower/InfJump/NoClip/Fly + PlayerESP(血量条+距离) + AutoFarm + AutoReset + 快捷键(T传敌/Y穿墙/U飞行)",
+        Description = "v2.0: 基于NexamTSB真实源码结构重写 — Communicate:FireServer真实技能入口(Console Move/KeyPress/LeftClick) + 读取技能栏随机释放 + AttackAura + AutoCombo连招 + AutoUltimate(GetAttribute Ultimate满100按G) + KillFarm(传送+自动终极+自动攻击) + AutoBlock(F格挡) + AutoReset + 移动/状态防抗 + PlayerESP(高亮+血量+距离) + 全亮 + 服务器 + Anti-AFK + 坐标 + 快捷键(T传敌/Y穿墙/U飞行)",
     },
     -- 未来扩展:
     -- {
