@@ -84,7 +84,7 @@ local GAME_REGISTRY = {
         PlaceIds = { 10449761463 },
         GameIds  = { 3808081382 },
         ScriptPath = "/Battlegrounds_QuantumUI.lua",
-        Description = "v2.0: 基于NexamTSB真实源码结构重写 — Communicate:FireServer真实技能入口(Console Move/KeyPress/LeftClick) + 读取技能栏随机释放 + AttackAura + AutoCombo连招 + AutoUltimate(GetAttribute Ultimate满100按G) + KillFarm(传送+自动终极+自动攻击) + AutoBlock(F格挡) + AutoReset + 移动/状态防抗 + PlayerESP(高亮+血量+距离) + 全亮 + 服务器 + Anti-AFK + 坐标 + 快捷键(T传敌/Y穿墙/U飞行)",
+        Description = "v3.0: 基于最近(2025-06)真实源码 Dark-X-Hub 重做 — Communicate:FireServer官方普攻(LeftClick) + 技能(Console Move) + 终极(G) + Trash垃圾农场(workspace.Map.Trash传送拾取) + Counter反琦玉检测(红色高亮) + Kamuy逃生 + AttackAura/AutoCombo/AutoUltimate + KillFarm + AutoBlock(F) + AutoReset + 移动/状态防抗 + PlayerESP(高亮+血量+距离) + 全亮 + 服务器 + Anti-AFK + 坐标 + 快捷键(T传敌/Y穿墙/U飞行/R逃生)",
     },
     -- 未来扩展:
     -- {
