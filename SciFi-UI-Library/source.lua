@@ -1502,6 +1502,7 @@ function QuantumUI:AddTab(options)
     function tab:AddSlider(opts) return window:CreateSlider(tabPage, opts) end
     function tab:AddDropdown(opts) return window:CreateDropdown(tabPage, opts) end
     function tab:AddTextbox(opts) return window:CreateTextbox(tabPage, opts) end
+    function tab:AddCommandBar(opts) return window:CreateCommandBar(tabPage, opts) end
     function tab:AddColorPicker(opts) return window:CreateColorPicker(tabPage, opts) end
     function tab:AddKeybind(opts) return window:CreateKeybind(tabPage, opts) end
     function tab:AddKeyAuth(opts) return window:CreateKeyAuth(tabPage, opts) end
@@ -2335,6 +2336,277 @@ function QuantumUI:CreateTextbox(parent, options)
         Get = function() return textbox.Text end
     }
     
+    if flag then self.Flags[flag] = obj; self.Elements[flag] = obj end
+    return obj
+end
+
+function QuantumUI:CreateCommandBar(parent, options)
+    options = options or {}
+    local flag = options.Flag
+    local currentMode = (options.DefaultMode == "loop") and "loop" or "single"
+    local running = false
+
+    local frame = Utility.Create("Frame", {
+        Parent = parent,
+        BackgroundColor3 = Color3.fromRGB(30, 30, 45),
+        BackgroundTransparency = 0.3,
+        BorderSizePixel = 0,
+        Size = UDim2.new(1, 0, 0, 204),
+        ZIndex = 7
+    }, { Utility.Create("UICorner", { CornerRadius = UDim.new(0, 8) }) })
+
+    -- 标题
+    Utility.Create("TextLabel", {
+        Parent = frame,
+        BackgroundTransparency = 1,
+        Size = UDim2.new(1, -30, 0, 20),
+        Position = UDim2.new(0, 15, 0, 5),
+        Font = Enum.Font.GothamBold,
+        Text = options.Name or "命令栏 (Command Bar)",
+        TextColor3 = self.ThemeColor,
+        TextSize = 14,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        ZIndex = 8
+    })
+
+    -- 代码输入区（多行可滚动）
+    local codeContainer = Utility.Create("Frame", {
+        Parent = frame,
+        BackgroundColor3 = Color3.fromRGB(40, 40, 55),
+        BorderSizePixel = 0,
+        Size = UDim2.new(1, -20, 0, 90),
+        Position = UDim2.new(0, 10, 0, 30),
+        ZIndex = 8
+    }, {
+        Utility.Create("UICorner", { CornerRadius = UDim.new(0, 6) }),
+        Utility.Create("UIStroke", { Color = self.ThemeColor, Thickness = 1, Transparency = 0.7 })
+    })
+
+    local codeScroll = Utility.Create("ScrollingFrame", {
+        Parent = codeContainer,
+        BackgroundTransparency = 1,
+        BorderSizePixel = 0,
+        Size = UDim2.new(1, -12, 1, -4),
+        Position = UDim2.new(0, 6, 0, 2),
+        CanvasSize = UDim2.new(0, 0, 0, 28),
+        ScrollBarThickness = 3,
+        ScrollBarImageColor3 = self.ThemeColor,
+        ZIndex = 9
+    })
+    self:AddThemeElement(codeScroll, "ScrollBarImageColor3")
+
+    local codeBox = Utility.Create("TextBox", {
+        Parent = codeScroll,
+        BackgroundTransparency = 1,
+        BorderSizePixel = 0,
+        Size = UDim2.new(1, -16, 0, 28),
+        Position = UDim2.new(0, 8, 0, 0),
+        Font = Enum.Font.Code,
+        Text = options.Default or "",
+        PlaceholderText = options.Placeholder or "在此粘贴要运行的 Lua 代码...",
+        PlaceholderColor3 = Color3.fromRGB(150, 150, 150),
+        TextColor3 = Color3.fromRGB(255, 255, 255),
+        TextSize = 12,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        TextYAlignment = Enum.TextYAlignment.Top,
+        ClearTextOnFocus = false,
+        MultiLine = true,
+        TextWrapped = true,
+        ZIndex = 9
+    })
+
+    local function refreshCodeScroll()
+        local h = math.max(28, codeBox.TextBounds.Y + 8)
+        codeBox.Size = UDim2.new(1, -16, 0, h)
+        codeScroll.CanvasSize = UDim2.new(0, 0, 0, h + 4)
+    end
+    codeBox:GetPropertyChangedSignal("TextBounds"):Connect(refreshCodeScroll)
+    codeBox:GetPropertyChangedSignal("Text"):Connect(function() task.defer(refreshCodeScroll) end)
+    task.defer(refreshCodeScroll)
+
+    codeBox.Focused:Connect(function()
+        Utility.PlaySound(Sounds.Click, 0.2)
+        Utility.Tween(codeContainer:FindFirstChildOfClass("UIStroke"), { Transparency = 0.3 }, 0.2)
+    end)
+    codeBox.FocusLost:Connect(function(enter)
+        Utility.Tween(codeContainer:FindFirstChildOfClass("UIStroke"), { Transparency = 0.7 }, 0.2)
+        if flag then self.ConfigData[flag] = codeBox.Text end
+    end)
+
+    -- 运行模式选择：单次 / 循环
+    local singleBtn = Utility.Create("TextButton", {
+        Parent = frame,
+        BackgroundColor3 = Color3.fromRGB(40, 40, 55),
+        BackgroundTransparency = 0.4,
+        BorderSizePixel = 0,
+        Size = UDim2.new(0.5, -15, 0, 30),
+        Position = UDim2.new(0, 10, 0, 128),
+        Font = Enum.Font.GothamSemibold,
+        Text = "单次运行",
+        TextColor3 = Color3.fromRGB(220, 220, 220),
+        TextSize = 13,
+        ZIndex = 9
+    }, { Utility.Create("UICorner", { CornerRadius = UDim.new(0, 6) }) })
+
+    local loopBtn = Utility.Create("TextButton", {
+        Parent = frame,
+        BackgroundColor3 = Color3.fromRGB(40, 40, 55),
+        BackgroundTransparency = 0.4,
+        BorderSizePixel = 0,
+        Size = UDim2.new(0.5, -15, 0, 30),
+        Position = UDim2.new(0.5, 5, 0, 128),
+        Font = Enum.Font.GothamSemibold,
+        Text = "循环运行",
+        TextColor3 = Color3.fromRGB(220, 220, 220),
+        TextSize = 13,
+        ZIndex = 9
+    }, { Utility.Create("UICorner", { CornerRadius = UDim.new(0, 6) }) })
+
+    local function refreshModeButtons()
+        if currentMode == "single" then
+            singleBtn.BackgroundColor3 = self.ThemeColor
+            singleBtn.TextColor3 = Color3.fromRGB(20, 20, 30)
+            loopBtn.BackgroundColor3 = Color3.fromRGB(40, 40, 55)
+            loopBtn.TextColor3 = Color3.fromRGB(220, 220, 220)
+        else
+            loopBtn.BackgroundColor3 = self.ThemeColor
+            loopBtn.TextColor3 = Color3.fromRGB(20, 20, 30)
+            singleBtn.BackgroundColor3 = Color3.fromRGB(40, 40, 55)
+            singleBtn.TextColor3 = Color3.fromRGB(220, 220, 220)
+        end
+    end
+
+    singleBtn.MouseButton1Click:Connect(function()
+        Utility.PlaySound(Sounds.Click, 0.3)
+        currentMode = "single"
+        refreshModeButtons()
+    end)
+    loopBtn.MouseButton1Click:Connect(function()
+        Utility.PlaySound(Sounds.Click, 0.3)
+        currentMode = "loop"
+        refreshModeButtons()
+    end)
+
+    -- 运行 / 停止 按钮
+    local runBtn = Utility.Create("TextButton", {
+        Parent = frame,
+        BackgroundColor3 = Color3.fromRGB(40, 40, 55),
+        BackgroundTransparency = 0.3,
+        BorderSizePixel = 0,
+        Size = UDim2.new(0.5, -15, 0, 34),
+        Position = UDim2.new(0, 10, 0, 164),
+        Font = Enum.Font.GothamBold,
+        Text = "运行",
+        TextColor3 = Color3.fromRGB(255, 255, 255),
+        TextSize = 14,
+        ZIndex = 9
+    }, {
+        Utility.Create("UICorner", { CornerRadius = UDim.new(0, 6) }),
+        Utility.Create("UIStroke", { Color = self.ThemeColor, Thickness = 1, Transparency = 0.6 })
+    })
+
+    local stopBtn = Utility.Create("TextButton", {
+        Parent = frame,
+        BackgroundColor3 = Color3.fromRGB(40, 40, 55),
+        BackgroundTransparency = 0.3,
+        BorderSizePixel = 0,
+        Size = UDim2.new(0.5, -15, 0, 34),
+        Position = UDim2.new(0.5, 5, 0, 164),
+        Font = Enum.Font.GothamBold,
+        Text = "停止",
+        TextColor3 = Color3.fromRGB(255, 255, 255),
+        TextSize = 14,
+        ZIndex = 9
+    }, {
+        Utility.Create("UICorner", { CornerRadius = UDim.new(0, 6) }),
+        Utility.Create("UIStroke", { Color = Color3.fromRGB(255, 90, 90), Thickness = 1, Transparency = 0.6 })
+    })
+
+    -- 执行逻辑
+    local function stop()
+        running = false
+    end
+
+    local function execOnce(code)
+        if not code or code:match("^%s*$") then
+            return false, "代码为空"
+        end
+        local fn, compileErr = loadstring(code)
+        if not fn then
+            return false, "语法错误: " .. tostring(compileErr)
+        end
+        return pcall(fn)
+    end
+
+    local function run()
+        local code = codeBox.Text
+        if currentMode == "single" then
+            task.spawn(function()
+                local ok, e = execOnce(code)
+                if options.Callback then options.Callback(ok, e, code) end
+            end)
+            return
+        end
+
+        -- 循环模式
+        if running then return end
+        local fn, compileErr = loadstring(code)
+        if not fn then
+            local msg
+            if not code or code:match("^%s*$") then
+                msg = "代码为空"
+            else
+                msg = "语法错误: " .. tostring(compileErr)
+            end
+            warn("[CommandBar] " .. msg)
+            if options.Callback then options.Callback(false, msg, code) end
+            return
+        end
+        running = true
+        task.spawn(function()
+            while running do
+                local ok, e = pcall(fn)
+                if not ok then
+                    warn("[CommandBar] 循环运行错误: " .. tostring(e))
+                    if options.Callback then options.Callback(false, tostring(e), code) end
+                end
+                task.wait(options.Interval or 0.1)
+            end
+        end)
+    end
+
+    runBtn.MouseButton1Click:Connect(function()
+        Utility.PlaySound(Sounds.Click, 0.3)
+        run()
+    end)
+    stopBtn.MouseButton1Click:Connect(function()
+        Utility.PlaySound(Sounds.Click, 0.3)
+        stop()
+    end)
+
+    pcall(function() frame.Destroying:Connect(function() running = false end) end)
+
+    refreshModeButtons()
+    self:UpdateContentSize(parent)
+
+    local obj = {
+        Frame = frame,
+        Value = codeBox.Text,
+        GetCode = function() return codeBox.Text end,
+        SetCode = function(v) codeBox.Text = v or ""; task.defer(refreshCodeScroll) end,
+        GetMode = function() return currentMode end,
+        SetMode = function(m) currentMode = (m == "loop") and "loop" or "single"; refreshModeButtons() end,
+        Run = run,
+        Stop = stop,
+        IsRunning = function() return running end,
+        Set = function(_, v)
+            codeBox.Text = v or ""
+            if flag then self.ConfigData[flag] = codeBox.Text end
+            task.defer(refreshCodeScroll)
+        end,
+        Get = function() return codeBox.Text end
+    }
+
     if flag then self.Flags[flag] = obj; self.Elements[flag] = obj end
     return obj
 end

@@ -938,6 +938,54 @@ local function loadGenericScript()
         }, "\n"),
     })
 
+    -- ── TAB 5: 代码运行 (命令栏) ──
+    local CodeTab = Window:AddTab({
+        Name = "代码运行",
+        Icon = "rbxassetid://6031280882",
+    })
+
+    CodeTab:AddSection({ Name = "命令栏 (代码执行器)" })
+
+    CodeTab:AddCommandBar({
+        Name = "粘贴代码后运行",
+        Placeholder = "在此粘贴要运行的 Lua 代码 (例如 print('hello'))",
+        DefaultMode = "single",
+        Interval = 0.1,
+        Flag = "Generic_CodeBar",
+        Callback = function(ok, err, code)
+            if ok then
+                Window:Notify({
+                    Title = "执行完成",
+                    Content = "单次运行成功",
+                    Duration = 2,
+                    Type = "Success",
+                })
+            else
+                Window:Notify({
+                    Title = "运行失败",
+                    Content = tostring(err),
+                    Duration = 4,
+                    Type = "Error",
+                })
+                warn("[Log-Hub] 命令栏执行失败:", err)
+            end
+        end,
+    })
+
+    CodeTab:AddSection({ Name = "使用说明" })
+
+    CodeTab:AddParagraph({
+        Title   = "代码运行说明",
+        Content = table.concat({
+            "• 在上方输入框粘贴 Lua 代码",
+            "• 选择运行模式:",
+            "  - 单次运行: 执行一次后停止",
+            "  - 循环运行: 每隔 0.1s 重复执行，点「停止」结束",
+            "• 点击「运行」开始执行，点击「停止」结束循环",
+            "• 执行结果 / 错误会输出到控制台 (F9)",
+        }, "\n"),
+    })
+
     -- ── 完成通知 ──
     task.wait(0.3)
     Window:Notify({
