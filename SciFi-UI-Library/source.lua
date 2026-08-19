@@ -1456,10 +1456,16 @@ function QuantumUI:_MergeColumnsIntoPage(tab)
             if ch:IsA("GuiObject") then ch.Parent = page end
         end
     end
+    -- v3.3.1 FIX: 先把 page 移出 holder 再销毁（原实现销毁 holder 时连带销毁 page，导致 Parent 锁定报错）
+    if page then
+        page.Parent = self.ScreenGui
+    end
     if holder then holder:Destroy() end
-    page.Parent = self.ContentContainer or page.Parent
-    page.Size = UDim2.new(1, -20, 1, -20)
-    page.Position = UDim2.new(0, 10, 0, 10)
+    if page and self.ContentContainer then
+        page.Parent = self.ContentContainer
+        page.Size = UDim2.new(1, -20, 1, -20)
+        page.Position = UDim2.new(0, 10, 0, 10)
+    end
     tab.PageHolder = nil
     tab.ColB = nil
 end
@@ -2012,6 +2018,7 @@ function QuantumUI:_LayoutNaturalSize(name)
 end
 
 -- 销毁当前布局框架（Tab 页面已被摘出，控件状态无损）
+-- v3.3.1: 防御性抢救 —— 页面若仍挂在 Panel/PageHolder 内，先移出到 ScreenGui 再销毁容器
 function QuantumUI:_TeardownLayout()
     for _, c in ipairs(self._LayoutConnections) do
         pcall(function() c:Disconnect() end)
@@ -2019,9 +2026,21 @@ function QuantumUI:_TeardownLayout()
     self._LayoutConnections = {}
     for _, t in ipairs(self.Tabs) do
         if t._Tip then t._Tip:Destroy() t._Tip = nil end
-        if t.Panel then t.Panel:Destroy() t.Panel = nil end
+        local pageAlive = t.Page ~= nil and t.Page.Parent ~= nil
+        if t.Panel then
+            if pageAlive and t.Page:IsDescendantOf(t.Panel) then
+                t.Page.Parent = self.ScreenGui
+            end
+            t.Panel:Destroy() t.Panel = nil
+        end
+        if t.PageHolder then
+            if pageAlive and t.Page:IsDescendantOf(t.PageHolder) then
+                t.Page.Parent = self.ScreenGui
+            end
+            t.PageHolder:Destroy() t.PageHolder = nil
+        end
+        t.ColB = nil
         t.Button = nil; t.Icon = nil; t.TextLabel = nil; t.Indicator = nil
-        t.PageHolder = nil; t.ColB = nil
     end
     if self.MainFrame then
         self.MainFrame:Destroy()
@@ -2041,84 +2060,127 @@ function QuantumUI:_TeardownLayout()
 end
 
 -- 实时切换布局：Tab 页面整体搬运，控件/回调/数值全部保留
+-- v3.3.1: pcall 保护，切换失败时回退 Default，_Switching 标志必定复位
 function QuantumUI:SwitchLayout(layoutName)
     if self._Switching then return end
     if not LayoutDisplay[layoutName] or layoutName == self.CurrentLayout then return end
     self._Switching = true
 
-    -- 保存状态（位置/选中/尺寸）
-    local savedPos = (self.MainFrame and self.MainFrame.Position) or UDim2.new(0.5, 0, 0.5, 0)
-    if self.Maximized and self.SavedPosition then savedPos = self.SavedPosition end
-    self.Maximized = false
-    self.CanDrag = true
-    local selectedName = self.SelectedTab and self.SelectedTab.Name
+    local holder = nil
+    local ok, err = pcall(function()
+        -- 保存状态（位置/选中/尺寸）
+        local savedPos = (self.MainFrame and self.MainFrame.Position) or UDim2.new(0.5, 0, 0.5, 0)
+        if self.Maximized and self.SavedPosition then savedPos = self.SavedPosition end
+        self.Maximized = false
+        self.CanDrag = true
+        local selectedName = self.SelectedTab and self.SelectedTab.Name
 
-    -- 旧布局特殊结构还原（TopBar 双栏合并回单页）
-    if self.CurrentLayout == "TopBar" then
-        for _, t in ipairs(self.Tabs) do self:_MergeColumnsIntoPage(t) end
-    end
-
-    -- 摘出所有 Tab 页面（控件实例原样保留）
-    local holder = Instance.new("Folder")
-    holder.Name = "_TabPages"
-    holder.Parent = self.ScreenGui
-    for _, t in ipairs(self.Tabs) do
-        if t.Page then t.Page.Parent = holder end
-    end
-
-    self:_TeardownLayout()
-
-    -- 构建新布局
-    self.CurrentLayout = layoutName
-    self.Size = self:_LayoutNaturalSize(layoutName)
-    self:CreateMainWindow(true)
-
-    -- 恢复所有 Tab（新风格按钮 + 页面搬运）
-    for _, t in ipairs(self.Tabs) do
-        local page = t.Page
-        if page then
-            page.Parent = self.ContentContainer
-            page.Size = UDim2.new(1, -20, 1, -20)
-            page.Position = UDim2.new(0, 10, 0, 10)
-            page.Visible = false
+        -- 旧布局特殊结构还原（TopBar 双栏合并回单页）
+        if self.CurrentLayout == "TopBar" then
+            for _, t in ipairs(self.Tabs) do self:_MergeColumnsIntoPage(t) end
         end
-        self:CreateTabButton(t, {Name = t.Name, Icon = t.IconAsset})
-    end
-    holder:Destroy()
 
-    -- TopBar：双栏拆分
-    if layoutName == "TopBar" then
-        for _, t in ipairs(self.Tabs) do self:_SplitPageIntoColumns(t) end
-    end
-
-    -- 恢复选中状态
-    self.SelectedTab = nil
-    if layoutName == "Grid" then
-        self:ShowGridHome()
-    else
-        local target = nil
+        -- 摘出所有 Tab 页面（控件实例原样保留；跳过已销毁的页面）
+        holder = Instance.new("Folder")
+        holder.Name = "_TabPages"
+        holder.Parent = self.ScreenGui
         for _, t in ipairs(self.Tabs) do
-            if t.Name == selectedName then target = t break end
+            if t.Page and t.Page.Parent ~= nil then t.Page.Parent = holder end
         end
-        if not target then target = self.Tabs[1] end
-        if target then
-            if layoutName == "Float" then
-                self:ToggleFloatPanel(target)
-            else
-                self:SelectTab(target)
+
+        self:_TeardownLayout()
+
+        -- 构建新布局
+        self.CurrentLayout = layoutName
+        self.Size = self:_LayoutNaturalSize(layoutName)
+        self:CreateMainWindow(true)
+
+        -- 恢复所有 Tab（新风格按钮 + 页面搬运）
+        for _, t in ipairs(self.Tabs) do
+            local page = t.Page
+            if page and page.Parent ~= nil then
+                page.Parent = self.ContentContainer
+                page.Size = UDim2.new(1, -20, 1, -20)
+                page.Position = UDim2.new(0, 10, 0, 10)
+                page.Visible = false
+            end
+            self:CreateTabButton(t, {Name = t.Name, Icon = t.IconAsset})
+        end
+
+        -- TopBar：双栏拆分
+        if layoutName == "TopBar" then
+            for _, t in ipairs(self.Tabs) do self:_SplitPageIntoColumns(t) end
+        end
+
+        -- 恢复选中状态
+        self.SelectedTab = nil
+        if layoutName == "Grid" then
+            self:ShowGridHome()
+        else
+            local target = nil
+            for _, t in ipairs(self.Tabs) do
+                if t.Name == selectedName then target = t break end
+            end
+            if not target then target = self.Tabs[1] end
+            if target then
+                if layoutName == "Float" then
+                    self:ToggleFloatPanel(target)
+                else
+                    self:SelectTab(target)
+                end
             end
         end
+
+        -- 位置保持（避免跳到屏幕中心）
+        if self.MainFrame then self.MainFrame.Position = savedPos end
+        self:ApplyThemeToTree(self.MainFrame)
+        for _, t in ipairs(self.Tabs) do
+            if t.Panel then self:ApplyThemeToTree(t.Panel) end
+        end
+    end)
+
+    -- holder 仅在全部页面成功迁移后销毁（失败时保留，页面可被回退流程再次取出）
+    if holder and ok then
+        holder:Destroy()
     end
 
-    -- 位置保持（避免跳到屏幕中心）
-    if self.MainFrame then self.MainFrame.Position = savedPos end
-    self:ApplyThemeToTree(self.MainFrame)
-    for _, t in ipairs(self.Tabs) do
-        if t.Panel then self:ApplyThemeToTree(t.Panel) end
+    if not ok then
+        warn("[QuantumUI] SwitchLayout error: " .. tostring(err))
+    end
+    self._Switching = false
+
+    if not ok then
+        -- 回退到 Default 布局，保证 UI 仍可用
+        if self.CurrentLayout ~= "Default" then
+            local fbName = self.CurrentLayout
+            self.CurrentLayout = "Default"
+            pcall(function()
+                self:_TeardownLayout()
+                self.Size = self:_LayoutNaturalSize("Default")
+                self:CreateMainWindow(true)
+                for _, t in ipairs(self.Tabs) do
+                    local page = t.Page
+                    if page and page.Parent ~= nil then
+                        page.Parent = self.ContentContainer
+                        page.Size = UDim2.new(1, -20, 1, -20)
+                        page.Position = UDim2.new(0, 10, 0, 10)
+                        page.Visible = false
+                    end
+                    self:CreateTabButton(t, {Name = t.Name, Icon = t.IconAsset})
+                end
+                local first = self.Tabs[1]
+                if first then self:SelectTab(first) end
+                self:ApplyThemeToTree(self.MainFrame)
+            end)
+            if holder then holder:Destroy() end
+            self:_SaveLayoutPrefs()
+            warn("[QuantumUI] 已回退到经典默认布局（原目标: " .. tostring(fbName) .. "）")
+            self:Notify({Title = "布局切换失败", Content = "已回退到经典默认布局", Duration = 3, Type = "Error"})
+        end
+        return
     end
 
     self:_SaveLayoutPrefs()
-    self._Switching = false
     Utility.PlaySound(Sounds.Open, 0.4)
     self:Notify({
         Title = "布局已切换",
