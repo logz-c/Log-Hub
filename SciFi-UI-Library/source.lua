@@ -22,6 +22,7 @@ QuantumUI.Transparency = 0.3
 QuantumUI.RainbowEnabled = true
 QuantumUI.RainbowSpeed = 1
 QuantumUI.Instance = nil  -- 单例：防止重复注入
+QuantumUI.Assets = CustomAssets
 QuantumUI.RainbowColors = {
     Color3.fromRGB(255, 0, 0),
     Color3.fromRGB(255, 127, 0),
@@ -215,6 +216,24 @@ local LocalPlayer = Players.LocalPlayer
 local Mouse = LocalPlayer:GetMouse()
 local IsMobile = UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled
 
+-- ╔══════════════════════════════════════════════════════════════╗
+-- ║   CUSTOM ASSET TABLE (uploaded via Roblox Studio MCP)        ║
+-- ║   Fill in real AssetIds after upload_image completes.        ║
+-- ╚══════════════════════════════════════════════════════════════╝
+local CustomAssets = {
+    -- Backgrounds & panels
+    PanelBg        = "rbxassetid://PENDING_BG_PANEL",
+    Divider        = "rbxassetid://PENDING_DIVIDER",
+    -- Buttons
+    BtnPrimary     = "rbxassetid://PENDING_BTN_PRIMARY",
+    BtnHover       = "rbxassetid://PENDING_BTN_HOVER",
+    -- Tab / section icons
+    IconSettings   = "rbxassetid://PENDING_ICON_SETTINGS",
+    IconPlayer     = "rbxassetid://PENDING_ICON_PLAYER",
+    IconCode       = "rbxassetid://PENDING_ICON_CODE",
+    IconWorld      = "rbxassetid://PENDING_ICON_WORLD",
+}
+
 local Sounds = {
     Click = "rbxassetid://6895079853",
     Hover = "rbxassetid://6895079709",
@@ -229,6 +248,12 @@ local Sounds = {
     SpecialLoad = "rbxassetid://5856815743"
 }
 
+-- ═══════════════════════════════════════════════════════════════
+--               SQUARE-CORNER (NO UICorner) MODE
+--   Set USE_SQUARE_CORNERS = true to strip ALL rounded corners.
+-- ═══════════════════════════════════════════════════════════════
+local USE_SQUARE_CORNERS = true
+
 -- ═══════════════════════════════════════════════════════════════════
 --                          UTILITY
 -- ═══════════════════════════════════════════════════════════════════
@@ -236,6 +261,18 @@ local Sounds = {
 local Utility = {}
 
 function Utility.Create(className, properties, children)
+    if className == "UICorner" and USE_SQUARE_CORNERS then
+        local proxy = {Parent = nil, Destroy = function() end, IsA = function() return false end}
+        local mt = {}
+        mt.__newindex = function() end
+        mt.__index = function() return nil end
+        setmetatable(proxy, mt)
+        function proxy:GetPropertyChangedSignal()
+            local e = {Connect = function() return {Disconnect = function() end} end}
+            return e
+        end
+        return proxy
+    end
     local instance = Instance.new(className)
     for prop, value in pairs(properties or {}) do
         if prop ~= "Parent" then
@@ -243,7 +280,14 @@ function Utility.Create(className, properties, children)
         end
     end
     for _, child in pairs(children or {}) do
-        child.Parent = instance
+        if child and child ~= true then
+            local ok = pcall(function() child.Parent = instance end)
+            if not ok then
+                pcall(function()
+                    if type(child) == "userdata" then child.Parent = instance end
+                end)
+            end
+        end
     end
     if properties and properties.Parent then
         instance.Parent = properties.Parent
@@ -3651,7 +3695,7 @@ end
 -- ═══════════════════════════════════════════════════════════════════
 
 function QuantumUI:CreateSettingsTab()
-    local settingsTab = self:AddTab({Name = "Settings", Icon = "rbxassetid://6031280882"})
+    local settingsTab = self:AddTab({Name = "Settings", Icon = CustomAssets.IconSettings})
     
     -- ═══════════════════════════════════════
     -- CONFIG SECTION

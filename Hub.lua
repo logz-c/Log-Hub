@@ -256,6 +256,8 @@ local function loadGenericScript()
         Keybind  = Enum.KeyCode.RightControl,
     })
 
+    local Icons = QuantumUI.Assets or {}
+
     task.wait(3.5)
     _G.QuantumUI_Window = Window
 
@@ -286,7 +288,7 @@ local function loadGenericScript()
     -- ── TAB 1: 位置 & 信息 ──
     local InfoTab = Window:AddTab({
         Name = "位置/信息",
-        Icon = "rbxassetid://6034287594",
+        Icon = Icons.IconPlayer or "rbxassetid://6034287594",
     })
 
     InfoTab:AddSection({ Name = "当前游戏信息" })
@@ -521,7 +523,7 @@ local function loadGenericScript()
     -- ── TAB 2: 场景传送 (该游戏所有子场景) ──
     local SceneTab = Window:AddTab({
         Name = "场景传送",
-        Icon = "rbxassetid://6035153470",
+        Icon = Icons.IconWorld or "rbxassetid://6035153470",
     })
 
     SceneTab:AddSection({ Name = "当前游戏信息" })
@@ -767,7 +769,7 @@ local function loadGenericScript()
     -- ── TAB 3: 玩家移动 ──
     local PlayerTab = Window:AddTab({
         Name = "玩家",
-        Icon = "rbxassetid://6034466796",
+        Icon = Icons.IconPlayer or "rbxassetid://6034466796",
     })
 
     PlayerTab:AddSection({ Name = "WalkSpeed (移速)" })
@@ -849,7 +851,7 @@ local function loadGenericScript()
     -- ── TAB 4: 杂项 ──
     local MiscTab = Window:AddTab({
         Name = "杂项",
-        Icon = "rbxassetid://6031280882",
+        Icon = Icons.IconSettings or "rbxassetid://6031280882",
     })
 
     MiscTab:AddSection({ Name = "快捷操作" })
@@ -941,7 +943,7 @@ local function loadGenericScript()
     -- ── TAB 5: 代码运行 (命令栏) ──
     local CodeTab = Window:AddTab({
         Name = "代码运行",
-        Icon = "rbxassetid://6031280882",
+        Icon = Icons.IconCode or "rbxassetid://6031280882",
     })
 
     CodeTab:AddSection({ Name = "命令栏 (代码执行器)" })
