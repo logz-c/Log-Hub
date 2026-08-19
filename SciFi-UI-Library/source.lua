@@ -1,21 +1,22 @@
 --[[
     ╔══════════════════════════════════════════════════════════════════╗
     ║                        QUANTUM UI LIBRARY                        ║
-    ║                Version 3.2.0 - DangerConfirm API                ║
+    ║            Version 3.3.0 - Layout & Theme Engine                 ║
     ║                         Created by log_quick                     ║
     ║                                                                  ║
-    ║  Changelog v3.2.0:                                              ║
-    ║  • FIX: Destroy 后无法再次注入的 BUG (清理 _G.QuantumUI_Window,║
-    ║       CoreGui 内遗留 QuantumUI_* 实例、RainbowHandler.Objects)  ║
-    ║  • NEW: Window:DangerConfirm() 危险确认模态弹窗 API             ║
-    ║  • NEW: Tab:AddDangerToggle() 危险开关(带二次确认)              ║
-    ║  • NEW: 销毁 UI (Settings→Destroy) 先弹出 DangerConfirm         ║
+    ║  Changelog v3.3.0:                                              ║
+    ║  • NEW: 6 种布局排版实时切换（经典默认/侧栏图标/顶栏双栏/        ║
+    ║       卡片平铺/浮动面板/Vape风格），Settings 内自由选择          ║
+    ║  • NEW: 4 套配色主题（青蓝/黑金/霓虹紫/冰霜）实时切换 + 持久化  ║
+    ║  • NEW: Window:SwitchLayout(name) / Window:SwitchTheme(name) API ║
+    ║  • NEW: 布局切换时 Tab 页面整体搬运，控件数值/回调/状态无损     ║
+    ║  • FIX: 切换布局后窗口位置保持，不再跳至屏幕中心                ║
     ╚══════════════════════════════════════════════════════════════════╝
 --]]
 
 local QuantumUI = {}
 QuantumUI.__index = QuantumUI
-QuantumUI.Version = "3.2.0"
+QuantumUI.Version = "3.3.0"
 QuantumUI.Author = "log_quick"
 QuantumUI.ThemeColor = Color3.fromRGB(0, 200, 255)
 QuantumUI.Transparency = 0.3
@@ -32,6 +33,157 @@ QuantumUI.RainbowColors = {
     Color3.fromRGB(75, 0, 130),
     Color3.fromRGB(143, 0, 255)
 }
+
+-- ═══════════════════════════════════════════════════════════════════
+--            THEME ENGINE (v3.3.0) - 4 套完整配色可自由切换
+-- ═══════════════════════════════════════════════════════════════════
+local Themes = {
+    Cyan = {
+        DisplayName = "青蓝 Cyan",
+        Accent = Color3.fromRGB(0, 200, 255),
+        MainBg = Color3.fromRGB(15, 15, 25),   TopBar = Color3.fromRGB(20, 20, 35),
+        TabBg = Color3.fromRGB(18, 18, 30),    Section = Color3.fromRGB(25, 25, 40),
+        Control = Color3.fromRGB(30, 30, 45),  ControlHover = Color3.fromRGB(40, 40, 55),
+        ControlAlt = Color3.fromRGB(50, 50, 65), ControlHover2 = Color3.fromRGB(60, 60, 85),
+        Text = Color3.fromRGB(255, 255, 255),  TextBright = Color3.fromRGB(230, 230, 240),
+        TextDim = Color3.fromRGB(200, 200, 200), TextFaint = Color3.fromRGB(150, 150, 150),
+        TextOnAccent = Color3.fromRGB(15, 15, 25),
+    },
+    Gold = {
+        DisplayName = "黑金 Gold",
+        Accent = Color3.fromRGB(201, 162, 39),
+        MainBg = Color3.fromRGB(12, 10, 6),    TopBar = Color3.fromRGB(19, 15, 9),
+        TabBg = Color3.fromRGB(15, 12, 7),     Section = Color3.fromRGB(21, 17, 10),
+        Control = Color3.fromRGB(27, 22, 11),  ControlHover = Color3.fromRGB(37, 30, 15),
+        ControlAlt = Color3.fromRGB(49, 40, 19), ControlHover2 = Color3.fromRGB(61, 50, 24),
+        Text = Color3.fromRGB(243, 223, 162),  TextBright = Color3.fromRGB(238, 214, 140),
+        TextDim = Color3.fromRGB(201, 182, 130), TextFaint = Color3.fromRGB(158, 138, 90),
+        TextOnAccent = Color3.fromRGB(12, 10, 6),
+    },
+    Violet = {
+        DisplayName = "霓虹紫 Violet",
+        Accent = Color3.fromRGB(176, 38, 255),
+        MainBg = Color3.fromRGB(18, 5, 31),    TopBar = Color3.fromRGB(27, 10, 44),
+        TabBg = Color3.fromRGB(22, 8, 37),     Section = Color3.fromRGB(30, 12, 50),
+        Control = Color3.fromRGB(38, 16, 63),  ControlHover = Color3.fromRGB(48, 22, 80),
+        ControlAlt = Color3.fromRGB(58, 28, 95), ControlHover2 = Color3.fromRGB(70, 35, 112),
+        Text = Color3.fromRGB(233, 207, 255),  TextBright = Color3.fromRGB(224, 194, 250),
+        TextDim = Color3.fromRGB(190, 160, 230), TextFaint = Color3.fromRGB(150, 120, 190),
+        TextOnAccent = Color3.fromRGB(26, 4, 46),
+    },
+    Frost = {
+        DisplayName = "冰霜 Frost",
+        Accent = Color3.fromRGB(91, 141, 239),
+        MainBg = Color3.fromRGB(242, 245, 249), TopBar = Color3.fromRGB(255, 255, 255),
+        TabBg = Color3.fromRGB(230, 236, 245),  Section = Color3.fromRGB(255, 255, 255),
+        Control = Color3.fromRGB(246, 248, 252), ControlHover = Color3.fromRGB(230, 236, 245),
+        ControlAlt = Color3.fromRGB(214, 222, 235), ControlHover2 = Color3.fromRGB(199, 210, 228),
+        Text = Color3.fromRGB(31, 48, 86),      TextBright = Color3.fromRGB(38, 56, 96),
+        TextDim = Color3.fromRGB(106, 122, 157), TextFaint = Color3.fromRGB(120, 135, 168),
+        TextOnAccent = Color3.fromRGB(255, 255, 255),
+    },
+}
+local ThemeOrder = {"Cyan", "Gold", "Violet", "Frost"}
+
+-- 布局（v3.3.0）：6 种排版结构，可在 Settings 中实时切换
+local LayoutDisplay = {
+    Default = "经典默认",
+    Rail = "侧栏图标",
+    TopBar = "顶栏双栏",
+    Grid = "卡片平铺",
+    Float = "浮动面板",
+    Vape = "Vape 风格",
+}
+local LayoutOrder = {"Default", "Rail", "TopBar", "Grid", "Float", "Vape"}
+
+QuantumUI.Themes = Themes
+QuantumUI.ThemeOrder = ThemeOrder
+QuantumUI.LayoutDisplay = LayoutDisplay
+QuantumUI.LayoutOrder = LayoutOrder
+
+-- Color3 无法直接作 table key（每次构造都是新 userdata），转字符串键
+local function CKey(c)
+    return string.format("%d,%d,%d", math.floor(c.R * 255 + 0.5), math.floor(c.G * 255 + 0.5), math.floor(c.B * 255 + 0.5))
+end
+
+-- 旧版硬编码中性色 → 主题槽位（主题切换时对整棵 UI 树做重映射）
+local NEUTRAL_REMAP = {
+    ["15,15,25"] = "MainBg",
+    ["20,20,35"] = "TopBar",
+    ["18,18,30"] = "TabBg",
+    ["25,25,40"] = "Section",
+    ["30,30,45"] = "Control",
+    ["40,40,55"] = "ControlHover",
+    ["50,50,65"] = "ControlAlt",
+    ["60,60,85"] = "ControlHover2",
+    ["200,200,200"] = "TextDim",
+    ["150,150,150"] = "TextFaint",
+    ["220,220,220"] = "TextBright",
+    ["230,230,240"] = "TextBright",
+    ["230,230,245"] = "TextBright",
+    ["240,240,250"] = "TextBright",
+    ["200,200,220"] = "TextBright",
+    ["180,180,200"] = "TextFaint",
+    ["160,160,180"] = "TextFaint",
+    ["255,255,255"] = "Text",
+}
+
+-- 所有主题的 accent 色 + 用户自定义色 → 统一重映射为当前 accent
+-- （未走 AddThemeElement 注册的直接赋值元素，主题切换后靠这里兜底换色）
+local ACCENT_KEYS = {}
+for _, th in pairs(Themes) do ACCENT_KEYS[CKey(th.Accent)] = true end
+
+-- 取当前主题槽位色（控件运行时改色用，避免主题切换后残留旧色）
+function QuantumUI:T(key)
+    local th = self.ActiveTheme or Themes.Cyan
+    return th[key] or Color3.fromRGB(255, 255, 255)
+end
+
+-- 把 root 下所有旧中性色/旧accent重映射为当前主题（跳过 ThemeExempt 子树，如取色器色块）
+function QuantumUI:ApplyThemeToTree(root)
+    if not root then return end
+    local th = self.ActiveTheme
+    if not th then return end
+    local function remapColor(c)
+        local k = CKey(c)
+        local slot = NEUTRAL_REMAP[k]
+        if slot and th[slot] then return th[slot] end
+        if ACCENT_KEYS[k] then return th.Accent end
+        return nil
+    end
+    local function visit(inst)
+        if inst:GetAttribute("ThemeExempt") then return end
+        if inst:IsA("GuiObject") then
+            local c = remapColor(inst.BackgroundColor3)
+            if c then inst.BackgroundColor3 = c end
+            if inst:IsA("TextLabel") or inst:IsA("TextButton") or inst:IsA("TextBox") then
+                c = remapColor(inst.TextColor3)
+                if c then inst.TextColor3 = c end
+                if inst:IsA("TextBox") then
+                    c = remapColor(inst.PlaceholderColor3)
+                    if c then inst.PlaceholderColor3 = c end
+                end
+            elseif inst:IsA("ImageLabel") or inst:IsA("ImageButton") then
+                c = remapColor(inst.ImageColor3)
+                if c then inst.ImageColor3 = c end
+            end
+        elseif inst:IsA("UIStroke") then
+            local c = remapColor(inst.Color)
+            if c then inst.Color = c end
+        end
+        if inst:IsA("ScrollingFrame") then
+            local c = remapColor(inst.ScrollBarImageColor3)
+            if c then inst.ScrollBarImageColor3 = c end
+        end
+        for _, ch in ipairs(inst:GetChildren()) do visit(ch) end
+    end
+    pcall(visit, root)
+end
+
+-- 布局重建时需要断开的连接（状态栏时钟 / 信息面板刷新等）
+function QuantumUI:TrackConn(conn)
+    if conn and self._LayoutConnections then table.insert(self._LayoutConnections, conn) end
+end
 
 -- ═══════════════════════════════════════════════════════════════════
 --                       KEYAUTH STATIC API
@@ -583,18 +735,40 @@ function QuantumUI.new(options)
     self.SavedPosition = nil
     self.SavedSize = nil
     self.BackgroundLabel = nil
-    
+    self._UserSize = self.Size  -- v3.3: 用户原始尺寸（Default 布局还原用）
+
+    -- v3.3: 布局/主题引擎状态
+    self.LayoutRegistry = {Tabs = {}}   -- 声明式注册表：Tab → Controls（重建 UI 用）
+    self._LayoutConnections = {}
+    self.NotifyHistory = {}
+    self.CurrentLayout = options.Layout or "Default"
+    self.ThemeName = options.Theme or "Cyan"
+
     QuantumUI.ThemeColor = self.ThemeColor
     QuantumUI.Transparency = self.Transparency
-    
+
     -- 注册到 _G 全局，确保跨 loadstring 可见
     _G.QuantumUI_Instance = self
-    
+
     -- Initialize config system
     ConfigSystem.Init()
-    
+
+    -- v3.3: 读取上次保存的 布局/主题 偏好（持久化）
+    pcall(function()
+        local prefs = ConfigSystem.LoadUI("LayoutPrefs")
+        if type(prefs) == "table" then
+            if prefs.Layout and LayoutDisplay[prefs.Layout] then self.CurrentLayout = prefs.Layout end
+            if prefs.Theme and Themes[prefs.Theme] then self.ThemeName = prefs.Theme end
+        end
+    end)
+    self.ActiveTheme = Themes[self.ThemeName] or Themes.Cyan
+    if self.ActiveTheme then
+        self.ThemeColor = self.ActiveTheme.Accent
+        QuantumUI.ThemeColor = self.ThemeColor
+    end
+
     self:Initialize()
-    
+
     return self
 end
 
@@ -770,7 +944,33 @@ function QuantumUI:CreateLoadingScreen()
     end)
 end
 
-function QuantumUI:CreateMainWindow()
+-- ═══════════════════════════════════════════════════════════════════
+--            WINDOW LAYOUT BUILDERS (v3.3.0) - 6 种排版结构
+-- ═══════════════════════════════════════════════════════════════════
+
+-- 布局调度器：根据 CurrentLayout 调用对应构建器
+function QuantumUI:CreateMainWindow(isRebuild)
+    if not LayoutDisplay[self.CurrentLayout] then self.CurrentLayout = "Default" end
+    local builder = self["BuildLayout_" .. self.CurrentLayout] or self.BuildLayout_Default
+    builder(self)
+    self:ApplyThemeToTree(self.MainFrame)
+    if not isRebuild then
+        -- 首次创建：异步挂 Settings Tab + AutoLoad（布局重建时由 RebuildUI 自己处理）
+        task.spawn(function()
+            task.wait(0.6)
+            self:CreateSettingsTab()
+            task.wait(0.5)
+            self:TryAutoLoadConfig()
+        end)
+    end
+end
+
+-- 通用窗口外壳（所有布局共用）：主框架 + 彩虹描边 + 扫描线 + 自定义背景图
+function QuantumUI:CreateWindowShell()
+    -- v3.3: CornerRadius / FlatBorder 由布局构建器预设（Vape 布局 = 方角 + 纯色描边）
+    if self.CornerRadius == nil then self.CornerRadius = 12 end
+    if self.FlatBorder == nil then self.FlatBorder = false end
+
     self.MainFrame = Utility.Create("Frame", {
         Name = "MainFrame",
         Parent = self.ScreenGui,
@@ -781,9 +981,14 @@ function QuantumUI:CreateMainWindow()
         Position = UDim2.new(0.5, 0, 0.5, 0),
         AnchorPoint = Vector2.new(0.5, 0.5),
         ClipsDescendants = true
-    }, {Utility.Create("UICorner", {CornerRadius = UDim.new(0, 12)})})
-    
-    -- NEW: Custom Background Image
+    }, {Utility.Create("UICorner", {CornerRadius = UDim.new(0, self.CornerRadius)})})
+
+    -- 重建后恢复标题栏位置偏好（最小化前位置不丢失）
+    if self._PendingFramePos then
+        self.MainFrame.Position = self._PendingFramePos
+        self._PendingFramePos = nil
+    end
+
     if self.BackgroundImage then
         self.BackgroundLabel = Utility.Create("ImageLabel", {
             Name = "BackgroundImage",
@@ -797,8 +1002,7 @@ function QuantumUI:CreateMainWindow()
             ZIndex = 0
         })
     end
-    
-    -- Rainbow Border
+
     local borderStroke = Utility.Create("UIStroke", {
         Parent = self.MainFrame,
         Color = self.ThemeColor,
@@ -806,12 +1010,13 @@ function QuantumUI:CreateMainWindow()
         Transparency = 0.3
     })
     self:AddThemeElement(borderStroke, "Color")
-    local borderGradient = Utility.CreateGradient(QuantumUI.RainbowColors, 0)
-    borderGradient.Parent = borderStroke
-    RainbowHandler.Add(borderStroke)
-    RainbowHandler.Start()
-    
-    -- Scanlines
+    if not self.FlatBorder then
+        local borderGradient = Utility.CreateGradient(QuantumUI.RainbowColors, 0)
+        borderGradient.Parent = borderStroke
+        RainbowHandler.Add(borderStroke)
+        RainbowHandler.Start()
+    end
+
     Utility.Create("ImageLabel", {
         Parent = self.MainFrame,
         BackgroundTransparency = 1,
@@ -822,8 +1027,46 @@ function QuantumUI:CreateMainWindow()
         TileSize = UDim2.new(0, 100, 0, 100),
         ZIndex = 2
     })
-    
-    -- Top Bar
+    return self.MainFrame
+end
+
+-- 通用窗口控制按钮组（返回 最小化/最大化/关闭 三个按钮）
+function QuantumUI:CreateControlCluster(parent, y)
+    local controls = Utility.Create("Frame", {
+        Parent = parent,
+        BackgroundTransparency = 1,
+        Size = UDim2.new(0, 90, 0, 30),
+        Position = UDim2.new(1, -100, 0, y or 10),
+        ZIndex = 11
+    })
+    local minimizeBtn = self:CreateControlButton(controls, "—", Color3.fromRGB(255, 190, 0), 0)
+    local maximizeBtn = self:CreateControlButton(controls, "□", Color3.fromRGB(0, 200, 100), 30)
+    local closeBtn = self:CreateControlButton(controls, "×", Color3.fromRGB(255, 80, 80), 60)
+    return minimizeBtn, maximizeBtn, closeBtn
+end
+
+-- 通用收尾：拖动 / 边框 / 控制按钮 / 快捷键 / 悬浮球 / 开场动画
+function QuantumUI:FinishWindow(minimizeBtn, maximizeBtn, closeBtn)
+    self:SetupDragging()
+    self:SetupBorderDragging()
+    self:SetupControlButtons(minimizeBtn, maximizeBtn, closeBtn)
+    self:SetupKeybind()
+    if not self.FloatingButton or not self.FloatingButton.Parent then
+        self:CreateFloatingButton()
+    end
+    Utility.PlaySound(Sounds.Open, 0.5)
+    Utility.Tween(self.MainFrame, {Size = self.Size}, 0.45, Enum.EasingStyle.Back)
+end
+
+-- ─────────────────────────────────────────────
+-- 布局 1: Default 经典默认（左侧 Tab 列表）
+-- ─────────────────────────────────────────────
+function QuantumUI:BuildLayout_Default()
+    self.TabStyle = "List"
+    self.CornerRadius = 12
+    self.FlatBorder = false
+    self:CreateWindowShell()
+
     local topBar = Utility.Create("Frame", {
         Name = "TopBar",
         Parent = self.MainFrame,
@@ -833,7 +1076,7 @@ function QuantumUI:CreateMainWindow()
         Size = UDim2.new(1, 0, 0, 50),
         ZIndex = 10
     }, {Utility.Create("UICorner", {CornerRadius = UDim.new(0, 12)})})
-    
+
     Utility.Create("Frame", {
         Parent = topBar,
         BackgroundColor3 = Color3.fromRGB(20, 20, 35),
@@ -843,7 +1086,7 @@ function QuantumUI:CreateMainWindow()
         Position = UDim2.new(0, 0, 1, -20),
         ZIndex = 9
     })
-    
+
     Utility.Create("TextLabel", {
         Parent = topBar,
         BackgroundTransparency = 1,
@@ -855,7 +1098,7 @@ function QuantumUI:CreateMainWindow()
         TextSize = 28,
         ZIndex = 11
     })
-    
+
     Utility.Create("TextLabel", {
         Parent = topBar,
         BackgroundTransparency = 1,
@@ -868,7 +1111,7 @@ function QuantumUI:CreateMainWindow()
         TextXAlignment = Enum.TextXAlignment.Left,
         ZIndex = 11
     })
-    
+
     Utility.Create("TextLabel", {
         Parent = topBar,
         BackgroundTransparency = 1,
@@ -881,19 +1124,10 @@ function QuantumUI:CreateMainWindow()
         TextXAlignment = Enum.TextXAlignment.Left,
         ZIndex = 11
     })
-    
-    local controls = Utility.Create("Frame", {
-        Parent = topBar,
-        BackgroundTransparency = 1,
-        Size = UDim2.new(0, 90, 0, 30),
-        Position = UDim2.new(1, -100, 0, 10),
-        ZIndex = 11
-    })
-    
-    local minimizeBtn = self:CreateControlButton(controls, "—", Color3.fromRGB(255, 190, 0), 0)
-    local maximizeBtn = self:CreateControlButton(controls, "□", Color3.fromRGB(0, 200, 100), 30)
-    local closeBtn = self:CreateControlButton(controls, "×", Color3.fromRGB(255, 80, 80), 60)
-    
+
+    local minimizeBtn, maximizeBtn, closeBtn = self:CreateControlCluster(topBar, 10)
+    self.TopBar = topBar
+
     local tabWidth = IsMobile and 50 or 150
     local tabContainer = Utility.Create("Frame", {
         Name = "TabContainer",
@@ -905,8 +1139,8 @@ function QuantumUI:CreateMainWindow()
         Position = UDim2.new(0, 1, 0, 51),
         ZIndex = 5
     })
-    
-    local tabList = Utility.Create("ScrollingFrame", {
+
+    self.TabList = Utility.Create("ScrollingFrame", {
         Name = "TabList",
         Parent = tabContainer,
         BackgroundTransparency = 1,
@@ -921,8 +1155,17 @@ function QuantumUI:CreateMainWindow()
         Utility.Create("UIListLayout", {SortOrder = Enum.SortOrder.LayoutOrder, Padding = UDim.new(0, 5)}),
         Utility.Create("UIPadding", {PaddingLeft = UDim.new(0, 5), PaddingRight = UDim.new(0, 5), PaddingTop = UDim.new(0, 5)})
     })
-    
-    local contentContainer = Utility.Create("Frame", {
+    self.TabContainer = tabContainer
+
+    -- 列表滚动区域自适应
+    local defLay = self.TabList:FindFirstChildOfClass("UIListLayout")
+    if defLay then
+        defLay:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+            self.TabList.CanvasSize = UDim2.new(0, 0, 0, defLay.AbsoluteContentSize.Y + 10)
+        end)
+    end
+
+    self.ContentContainer = Utility.Create("Frame", {
         Name = "ContentContainer",
         Parent = self.MainFrame,
         BackgroundTransparency = 1,
@@ -931,30 +1174,974 @@ function QuantumUI:CreateMainWindow()
         Position = UDim2.new(0, tabWidth, 0, 51),
         ZIndex = 5
     })
-    
+
+    self:FinishWindow(minimizeBtn, maximizeBtn, closeBtn)
+end
+
+-- ─────────────────────────────────────────────
+-- 布局 2: Rail 侧栏图标（窄图标栏 + 悬停提示）
+-- ─────────────────────────────────────────────
+function QuantumUI:BuildLayout_Rail()
+    self.TabStyle = "Rail"
+    self.CornerRadius = 12
+    self.FlatBorder = false
+    self:CreateWindowShell()
+
+    local topBar = Utility.Create("Frame", {
+        Name = "TopBar",
+        Parent = self.MainFrame,
+        BackgroundColor3 = Color3.fromRGB(20, 20, 35),
+        BackgroundTransparency = 0.3,
+        BorderSizePixel = 0,
+        Size = UDim2.new(1, 0, 0, 44),
+        ZIndex = 10
+    }, {Utility.Create("UICorner", {CornerRadius = UDim.new(0, 12)})})
+    Utility.Create("Frame", {
+        Parent = topBar,
+        BackgroundColor3 = Color3.fromRGB(20, 20, 35),
+        BackgroundTransparency = 0.3,
+        BorderSizePixel = 0,
+        Size = UDim2.new(1, 0, 0, 16),
+        Position = UDim2.new(0, 0, 1, -16),
+        ZIndex = 9
+    })
+    Utility.Create("TextLabel", {
+        Parent = topBar,
+        BackgroundTransparency = 1,
+        Size = UDim2.new(0, 30, 1, 0),
+        Position = UDim2.new(0, 12, 0, 0),
+        Font = Enum.Font.GothamBold,
+        Text = "Q",
+        TextColor3 = self.ThemeColor,
+        TextSize = 22,
+        ZIndex = 11
+    })
+    Utility.Create("TextLabel", {
+        Parent = topBar,
+        BackgroundTransparency = 1,
+        Size = UDim2.new(1, -220, 0, 20),
+        Position = UDim2.new(0, 46, 0.5, 0),
+        AnchorPoint = Vector2.new(0, 0.5),
+        Font = Enum.Font.GothamBold,
+        Text = self.Title,
+        TextColor3 = Color3.fromRGB(255, 255, 255),
+        TextSize = 16,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        TextTruncate = Enum.TextTruncate.AtEnd,
+        ZIndex = 11
+    })
+    local minimizeBtn, maximizeBtn, closeBtn = self:CreateControlCluster(topBar, 9)
     self.TopBar = topBar
+
+    local railW = IsMobile and 54 or 58
+    local tabContainer = Utility.Create("Frame", {
+        Name = "TabContainer",
+        Parent = self.MainFrame,
+        BackgroundColor3 = Color3.fromRGB(18, 18, 30),
+        BackgroundTransparency = 0.3,
+        BorderSizePixel = 0,
+        Size = UDim2.new(0, railW - 1, 1, -46),
+        Position = UDim2.new(0, 1, 0, 45),
+        ZIndex = 5
+    })
+    self.TabList = Utility.Create("ScrollingFrame", {
+        Name = "TabList",
+        Parent = tabContainer,
+        BackgroundTransparency = 1,
+        BorderSizePixel = 0,
+        Size = UDim2.new(1, 0, 1, -10),
+        Position = UDim2.new(0, 0, 0, 5),
+        CanvasSize = UDim2.new(0, 0, 0, 0),
+        ScrollBarThickness = 2,
+        ScrollBarImageColor3 = self.ThemeColor,
+        ZIndex = 6
+    }, {
+        Utility.Create("UIListLayout", {SortOrder = Enum.SortOrder.LayoutOrder, Padding = UDim.new(0, 6)}),
+        Utility.Create("UIPadding", {PaddingLeft = UDim.new(0, 6), PaddingRight = UDim.new(0, 6), PaddingTop = UDim.new(0, 4)})
+    })
+    self:AddThemeElement(self.TabList, "ScrollBarImageColor3")
     self.TabContainer = tabContainer
-    self.TabList = tabList
-    self.ContentContainer = contentContainer
-    
-    self:SetupDragging()
-    self:SetupBorderDragging()
-    self:SetupControlButtons(minimizeBtn, maximizeBtn, closeBtn)
-    self:SetupKeybind()
-    self:CreateFloatingButton()
-    
-    Utility.PlaySound(Sounds.Open, 0.5)
-    Utility.Tween(self.MainFrame, {Size = self.Size}, 0.5, Enum.EasingStyle.Back)
-    
-    -- Create settings tab and handle auto-load
-    task.spawn(function()
-        task.wait(0.6)
-        self:CreateSettingsTab()
-        
-        -- AUTO LOAD CONFIG (FIXED!)
-        task.wait(0.5)
-        self:TryAutoLoadConfig()
+
+    self.ContentContainer = Utility.Create("Frame", {
+        Name = "ContentContainer",
+        Parent = self.MainFrame,
+        BackgroundTransparency = 1,
+        BorderSizePixel = 0,
+        Size = UDim2.new(1, -railW - 1, 1, -46),
+        Position = UDim2.new(0, railW, 0, 45),
+        ZIndex = 5
+    })
+
+    -- Rail 滚动区域自适应
+    local railLay = self.TabList:FindFirstChildOfClass("UIListLayout")
+    if railLay then
+        railLay:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+            self.TabList.CanvasSize = UDim2.new(0, 0, 0, railLay.AbsoluteContentSize.Y + 10)
+        end)
+    end
+
+    self:FinishWindow(minimizeBtn, maximizeBtn, closeBtn)
+end
+
+-- ─────────────────────────────────────────────
+-- 布局 3: TopBar 顶栏双栏（横向药丸 Tab + 左右双栏内容）
+-- ─────────────────────────────────────────────
+function QuantumUI:BuildLayout_TopBar()
+    self.TabStyle = "Pills"
+    self.TabListHorizontal = true
+    self.CornerRadius = 12
+    self.FlatBorder = false
+    self:CreateWindowShell()
+
+    -- 标题行
+    local topBar = Utility.Create("Frame", {
+        Name = "TopBar",
+        Parent = self.MainFrame,
+        BackgroundColor3 = Color3.fromRGB(20, 20, 35),
+        BackgroundTransparency = 0.3,
+        BorderSizePixel = 0,
+        Size = UDim2.new(1, 0, 0, 46),
+        ZIndex = 10
+    }, {Utility.Create("UICorner", {CornerRadius = UDim.new(0, 12)})})
+    Utility.Create("Frame", {
+        Parent = topBar,
+        BackgroundColor3 = Color3.fromRGB(20, 20, 35),
+        BackgroundTransparency = 0.3,
+        BorderSizePixel = 0,
+        Size = UDim2.new(1, 0, 0, 16),
+        Position = UDim2.new(0, 0, 1, -16),
+        ZIndex = 9
+    })
+    Utility.Create("TextLabel", {
+        Parent = topBar,
+        BackgroundTransparency = 1,
+        Size = UDim2.new(0, 30, 1, 0),
+        Position = UDim2.new(0, 12, 0, 0),
+        Font = Enum.Font.GothamBold,
+        Text = "Q",
+        TextColor3 = self.ThemeColor,
+        TextSize = 22,
+        ZIndex = 11
+    })
+    Utility.Create("TextLabel", {
+        Parent = topBar,
+        BackgroundTransparency = 1,
+        Size = UDim2.new(0, 240, 0, 20),
+        Position = UDim2.new(0, 46, 0, 5),
+        Font = Enum.Font.GothamBold,
+        Text = self.Title,
+        TextColor3 = Color3.fromRGB(255, 255, 255),
+        TextSize = 16,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        TextTruncate = Enum.TextTruncate.AtEnd,
+        ZIndex = 11
+    })
+    Utility.Create("TextLabel", {
+        Parent = topBar,
+        BackgroundTransparency = 1,
+        Size = UDim2.new(0, 240, 0, 14),
+        Position = UDim2.new(0, 46, 1, -18),
+        Font = Enum.Font.Gotham,
+        Text = self.Subtitle,
+        TextColor3 = Color3.fromRGB(150, 150, 150),
+        TextSize = 11,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        TextTruncate = Enum.TextTruncate.AtEnd,
+        ZIndex = 11
+    })
+    local minimizeBtn, maximizeBtn, closeBtn = self:CreateControlCluster(topBar, 8)
+    self.TopBar = topBar
+
+    -- 横向 Tab 药丸行
+    self.TabList = Utility.Create("ScrollingFrame", {
+        Name = "TabList",
+        Parent = self.MainFrame,
+        BackgroundTransparency = 1,
+        BorderSizePixel = 0,
+        Size = UDim2.new(1, -20, 0, 30),
+        Position = UDim2.new(0, 10, 0, 52),
+        CanvasSize = UDim2.new(0, 0, 0, 0),
+        ScrollBarThickness = 2,
+        ScrollBarImageColor3 = self.ThemeColor,
+        ScrollingDirection = Enum.ScrollingDirection.X,
+        ZIndex = 6
+    }, {
+        Utility.Create("UIListLayout", {
+            SortOrder = Enum.SortOrder.LayoutOrder,
+            FillDirection = Enum.FillDirection.Horizontal,
+            Padding = UDim.new(0, 6),
+            VerticalAlignment = Enum.VerticalAlignment.Center
+        })
+    })
+    self:AddThemeElement(self.TabList, "ScrollBarImageColor3")
+    local pillsLay = self.TabList:FindFirstChildOfClass("UIListLayout")
+    if pillsLay then
+        pillsLay:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+            self.TabList.CanvasSize = UDim2.new(0, pillsLay.AbsoluteContentSize.X + 12, 0, 0)
+        end)
+    end
+
+    -- 内容区（双栏由 _SplitPageIntoColumns 动态生成）
+    self.ContentContainer = Utility.Create("Frame", {
+        Name = "ContentContainer",
+        Parent = self.MainFrame,
+        BackgroundTransparency = 1,
+        BorderSizePixel = 0,
+        Size = UDim2.new(1, 0, 1, -94),
+        Position = UDim2.new(0, 0, 0, 90),
+        ZIndex = 5
+    })
+
+    self:FinishWindow(minimizeBtn, maximizeBtn, closeBtn)
+end
+
+-- TopBar 双栏：把 Tab 页面拆成左右两栏（前半留左栏，后半挪右栏）
+function QuantumUI:_SplitPageIntoColumns(tab)
+    if not tab.Page or tab.PageHolder then return end
+    local page = tab.Page
+    local holder = Utility.Create("Frame", {
+        Name = "Columns",
+        Parent = self.ContentContainer,
+        BackgroundTransparency = 1,
+        BorderSizePixel = 0,
+        Size = UDim2.new(1, 0, 1, 0),
+        Visible = false,
+        ZIndex = 6
+    })
+    -- 左栏 = 原页面
+    page.Parent = holder
+    page.Size = UDim2.new(0.5, -8, 1, -12)
+    page.Position = UDim2.new(0, 4, 0, 4)
+    -- 右栏
+    local colB = Utility.Create("ScrollingFrame", {
+        Name = "ColB",
+        Parent = holder,
+        BackgroundTransparency = 1,
+        BorderSizePixel = 0,
+        Size = UDim2.new(0.5, -8, 1, -12),
+        Position = UDim2.new(0.5, 4, 0, 4),
+        CanvasSize = UDim2.new(0, 0, 0, 0),
+        ScrollBarThickness = 3,
+        ScrollBarImageColor3 = self.ThemeColor,
+        ZIndex = 6
+    }, {
+        Utility.Create("UIListLayout", {SortOrder = Enum.SortOrder.LayoutOrder, Padding = UDim.new(0, 10)}),
+        Utility.Create("UIPadding", {PaddingTop = UDim.new(0, 5), PaddingBottom = UDim.new(0, 5)})
+    })
+    self:AddThemeElement(colB, "ScrollBarImageColor3")
+    local colLay = colB:FindFirstChildOfClass("UIListLayout")
+    if colLay then
+        colLay:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+            colB.CanvasSize = UDim2.new(0, 0, 0, colLay.AbsoluteContentSize.Y + 20)
+        end)
+    end
+    -- 按 LayoutOrder 排序后分半
+    local kids = {}
+    for _, ch in ipairs(page:GetChildren()) do
+        if ch:IsA("GuiObject") then table.insert(kids, ch) end
+    end
+    table.sort(kids, function(a, b) return a.LayoutOrder < b.LayoutOrder end)
+    local half = math.ceil(#kids / 2)
+    for i = half + 1, #kids do kids[i].Parent = colB end
+    tab.PageHolder = holder
+    tab.ColB = colB
+end
+
+-- TopBar 双栏还原：右栏控件全部挪回页面
+function QuantumUI:_MergeColumnsIntoPage(tab)
+    if not tab.PageHolder then return end
+    local page, colB, holder = tab.Page, tab.ColB, tab.PageHolder
+    if colB then
+        for _, ch in ipairs(colB:GetChildren()) do
+            if ch:IsA("GuiObject") then ch.Parent = page end
+        end
+    end
+    if holder then holder:Destroy() end
+    page.Parent = self.ContentContainer or page.Parent
+    page.Size = UDim2.new(1, -20, 1, -20)
+    page.Position = UDim2.new(0, 10, 0, 10)
+    tab.PageHolder = nil
+    tab.ColB = nil
+end
+
+-- ─────────────────────────────────────────────
+-- 布局 4: Grid 卡片平铺（主页卡片网格 + 详情视图）
+-- ─────────────────────────────────────────────
+function QuantumUI:BuildLayout_Grid()
+    self.TabStyle = "Cards"
+    self.CornerRadius = 12
+    self.FlatBorder = false
+    self:CreateWindowShell()
+
+    local topBar = Utility.Create("Frame", {
+        Name = "TopBar",
+        Parent = self.MainFrame,
+        BackgroundColor3 = Color3.fromRGB(20, 20, 35),
+        BackgroundTransparency = 0.3,
+        BorderSizePixel = 0,
+        Size = UDim2.new(1, 0, 0, 46),
+        ZIndex = 10
+    }, {Utility.Create("UICorner", {CornerRadius = UDim.new(0, 12)})})
+    Utility.Create("Frame", {
+        Parent = topBar,
+        BackgroundColor3 = Color3.fromRGB(20, 20, 35),
+        BackgroundTransparency = 0.3,
+        BorderSizePixel = 0,
+        Size = UDim2.new(1, 0, 0, 16),
+        Position = UDim2.new(0, 0, 1, -16),
+        ZIndex = 9
+    })
+    Utility.Create("TextLabel", {
+        Parent = topBar,
+        BackgroundTransparency = 1,
+        Size = UDim2.new(0, 30, 1, 0),
+        Position = UDim2.new(0, 12, 0, 0),
+        Font = Enum.Font.GothamBold,
+        Text = "Q",
+        TextColor3 = self.ThemeColor,
+        TextSize = 22,
+        ZIndex = 11
+    })
+    Utility.Create("TextLabel", {
+        Parent = topBar,
+        BackgroundTransparency = 1,
+        Size = UDim2.new(1, -220, 0, 20),
+        Position = UDim2.new(0, 46, 0.5, 0),
+        AnchorPoint = Vector2.new(0, 0.5),
+        Font = Enum.Font.GothamBold,
+        Text = self.Title,
+        TextColor3 = Color3.fromRGB(255, 255, 255),
+        TextSize = 16,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        TextTruncate = Enum.TextTruncate.AtEnd,
+        ZIndex = 11
+    })
+    local minimizeBtn, maximizeBtn, closeBtn = self:CreateControlCluster(topBar, 8)
+    self.TopBar = topBar
+
+    -- 主页网格视图（TabList = 卡片网格）
+    local home = Utility.Create("Frame", {
+        Name = "HomeView",
+        Parent = self.MainFrame,
+        BackgroundColor3 = Color3.fromRGB(18, 18, 30),
+        BackgroundTransparency = 0.3,
+        BorderSizePixel = 0,
+        Size = UDim2.new(1, -2, 1, -48),
+        Position = UDim2.new(0, 1, 0, 47),
+        ZIndex = 5
+    })
+    self._HomeView = home
+    self.TabList = Utility.Create("ScrollingFrame", {
+        Name = "CardGrid",
+        Parent = home,
+        BackgroundTransparency = 1,
+        BorderSizePixel = 0,
+        Size = UDim2.new(1, -20, 1, -20),
+        Position = UDim2.new(0, 10, 0, 10),
+        CanvasSize = UDim2.new(0, 0, 0, 0),
+        ScrollBarThickness = 3,
+        ScrollBarImageColor3 = self.ThemeColor,
+        ZIndex = 6
+    }, {
+        Utility.Create("UIGridLayout", {
+            SortOrder = Enum.SortOrder.LayoutOrder,
+            CellSize = UDim2.new(0, 140, 0, 104),
+            CellPadding = UDim2.new(0, 12, 0, 12)
+        })
+    })
+    self:AddThemeElement(self.TabList, "ScrollBarImageColor3")
+    local gridLay = self.TabList:FindFirstChildOfClass("UIGridLayout")
+    if gridLay then
+        gridLay:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+            local sz = gridLay.AbsoluteContentSize
+            self.TabList.CanvasSize = UDim2.new(0, sz.X + 20, 0, sz.Y + 20)
+        end)
+    end
+
+    -- 详情视图（返回按钮 + 页面容器）
+    local detail = Utility.Create("Frame", {
+        Name = "DetailView",
+        Parent = self.MainFrame,
+        BackgroundTransparency = 1,
+        BorderSizePixel = 0,
+        Size = UDim2.new(1, -2, 1, -48),
+        Position = UDim2.new(0, 1, 0, 47),
+        Visible = false,
+        ZIndex = 5
+    })
+    self._DetailView = detail
+    local backBtn = Utility.Create("TextButton", {
+        Parent = detail,
+        BackgroundColor3 = Color3.fromRGB(30, 30, 45),
+        BackgroundTransparency = 0.3,
+        BorderSizePixel = 0,
+        Size = UDim2.new(0, 110, 0, 30),
+        Position = UDim2.new(0, 8, 0, 4),
+        Font = Enum.Font.GothamSemibold,
+        Text = "← 返回主页",
+        TextColor3 = Color3.fromRGB(200, 200, 200),
+        TextSize = 13,
+        ZIndex = 8
+    }, {Utility.Create("UICorner", {CornerRadius = UDim.new(0, 8)})})
+    backBtn.MouseEnter:Connect(function()
+        Utility.PlaySound(Sounds.Hover, 0.1)
+        Utility.Tween(backBtn, {BackgroundTransparency = 0.1}, 0.2)
     end)
+    backBtn.MouseLeave:Connect(function()
+        Utility.Tween(backBtn, {BackgroundTransparency = 0.3}, 0.2)
+    end)
+    backBtn.MouseButton1Click:Connect(function()
+        Utility.PlaySound(Sounds.Click, 0.3)
+        self:ShowGridHome()
+    end)
+    self._DetailTitle = Utility.Create("TextLabel", {
+        Parent = detail,
+        BackgroundTransparency = 1,
+        Size = UDim2.new(1, -240, 0, 30),
+        Position = UDim2.new(0, 128, 0, 4),
+        Font = Enum.Font.GothamBold,
+        Text = "",
+        TextColor3 = Color3.fromRGB(255, 255, 255),
+        TextSize = 15,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        TextTruncate = Enum.TextTruncate.AtEnd,
+        ZIndex = 8
+    })
+    self.ContentContainer = Utility.Create("Frame", {
+        Name = "ContentContainer",
+        Parent = detail,
+        BackgroundTransparency = 1,
+        BorderSizePixel = 0,
+        Size = UDim2.new(1, 0, 1, -40),
+        Position = UDim2.new(0, 0, 0, 40),
+        ZIndex = 5
+    })
+
+    self:FinishWindow(minimizeBtn, maximizeBtn, closeBtn)
+end
+
+-- Grid 布局返回主页（隐藏详情、清空选中）
+function QuantumUI:ShowGridHome()
+    self._GridDetail = false
+    if self._HomeView then self._HomeView.Visible = true end
+    if self._DetailView then self._DetailView.Visible = false end
+    for _, t in ipairs(self.Tabs) do
+        t.Page.Visible = false
+        if t.Indicator then t.Indicator.Visible = false end
+    end
+    self.SelectedTab = nil
+end
+
+-- ─────────────────────────────────────────────
+-- 布局 5: Float 浮动面板（紧凑 Hub + 每个Tab一个独立面板）
+-- ─────────────────────────────────────────────
+function QuantumUI:BuildLayout_Float()
+    self.TabStyle = "List"
+    self.CornerRadius = 12
+    self.FlatBorder = false
+    self:CreateWindowShell()
+
+    local topBar = Utility.Create("Frame", {
+        Name = "TopBar",
+        Parent = self.MainFrame,
+        BackgroundColor3 = Color3.fromRGB(20, 20, 35),
+        BackgroundTransparency = 0.3,
+        BorderSizePixel = 0,
+        Size = UDim2.new(1, 0, 0, 42),
+        ZIndex = 10
+    }, {Utility.Create("UICorner", {CornerRadius = UDim.new(0, 12)})})
+    Utility.Create("Frame", {
+        Parent = topBar,
+        BackgroundColor3 = Color3.fromRGB(20, 20, 35),
+        BackgroundTransparency = 0.3,
+        BorderSizePixel = 0,
+        Size = UDim2.new(1, 0, 0, 14),
+        Position = UDim2.new(0, 0, 1, -14),
+        ZIndex = 9
+    })
+    Utility.Create("TextLabel", {
+        Parent = topBar,
+        BackgroundTransparency = 1,
+        Size = UDim2.new(0, 24, 1, 0),
+        Position = UDim2.new(0, 10, 0, 0),
+        Font = Enum.Font.GothamBold,
+        Text = "Q",
+        TextColor3 = self.ThemeColor,
+        TextSize = 20,
+        ZIndex = 11
+    })
+    Utility.Create("TextLabel", {
+        Parent = topBar,
+        BackgroundTransparency = 1,
+        Size = UDim2.new(1, -130, 0, 18),
+        Position = UDim2.new(0, 38, 0.5, 0),
+        AnchorPoint = Vector2.new(0, 0.5),
+        Font = Enum.Font.GothamBold,
+        Text = self.Title,
+        TextColor3 = Color3.fromRGB(255, 255, 255),
+        TextSize = 14,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        TextTruncate = Enum.TextTruncate.AtEnd,
+        ZIndex = 11
+    })
+    local minimizeBtn, maximizeBtn, closeBtn = self:CreateControlCluster(topBar, 8)
+    self.TopBar = topBar
+
+    -- Hub 面板开关列表
+    local listWrap = Utility.Create("Frame", {
+        Name = "TabContainer",
+        Parent = self.MainFrame,
+        BackgroundColor3 = Color3.fromRGB(18, 18, 30),
+        BackgroundTransparency = 0.3,
+        BorderSizePixel = 0,
+        Size = UDim2.new(1, -2, 1, -44),
+        Position = UDim2.new(0, 1, 0, 43),
+        ZIndex = 5
+    })
+    self.TabList = Utility.Create("ScrollingFrame", {
+        Name = "TabList",
+        Parent = listWrap,
+        BackgroundTransparency = 1,
+        BorderSizePixel = 0,
+        Size = UDim2.new(1, 0, 1, -34),
+        Position = UDim2.new(0, 0, 0, 4),
+        CanvasSize = UDim2.new(0, 0, 0, 0),
+        ScrollBarThickness = 2,
+        ScrollBarImageColor3 = self.ThemeColor,
+        ZIndex = 6
+    }, {
+        Utility.Create("UIListLayout", {SortOrder = Enum.SortOrder.LayoutOrder, Padding = UDim.new(0, 5)}),
+        Utility.Create("UIPadding", {PaddingLeft = UDim.new(0, 5), PaddingRight = UDim.new(0, 5), PaddingTop = UDim.new(0, 5)})
+    })
+    self:AddThemeElement(self.TabList, "ScrollBarImageColor3")
+    local hubLay = self.TabList:FindFirstChildOfClass("UIListLayout")
+    if hubLay then
+        hubLay:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+            self.TabList.CanvasSize = UDim2.new(0, 0, 0, hubLay.AbsoluteContentSize.Y + 10)
+        end)
+    end
+    Utility.Create("TextLabel", {
+        Parent = listWrap,
+        BackgroundTransparency = 1,
+        Size = UDim2.new(1, 0, 0, 22),
+        Position = UDim2.new(0, 0, 1, -26),
+        Font = Enum.Font.Gotham,
+        Text = "点击条目 开/关 浮动面板",
+        TextColor3 = Color3.fromRGB(150, 150, 150),
+        TextSize = 11,
+        ZIndex = 8
+    })
+    self.TabContainer = listWrap
+
+    -- 页面停泊区（Float 模式下不可见，页面实际挂在各浮动面板里）
+    self.ContentContainer = Utility.Create("Frame", {
+        Name = "ContentContainer",
+        Parent = self.MainFrame,
+        BackgroundTransparency = 1,
+        BorderSizePixel = 0,
+        Size = UDim2.new(0, 0, 0, 0),
+        Visible = false,
+        ZIndex = 1
+    })
+
+    self:FinishWindow(minimizeBtn, maximizeBtn, closeBtn)
+end
+
+-- Float 布局：为 Tab 构建独立浮动面板（页面移入面板内）
+function QuantumUI:_BuildFloatPanel(tab)
+    local idx = 0
+    for _, t in ipairs(self.Tabs) do
+        if t.Panel then idx = idx + 1 end
+    end
+    local panel = Utility.Create("Frame", {
+        Name = "FloatPanel_" .. tab.Name,
+        Parent = self.ScreenGui,
+        BackgroundColor3 = Color3.fromRGB(15, 15, 25),
+        BackgroundTransparency = self.Transparency,
+        BorderSizePixel = 0,
+        Size = UDim2.new(0, 400, 0, 350),
+        Position = UDim2.new(0.5, -160 + idx * 44, 0.5, -30 + idx * 32),
+        AnchorPoint = Vector2.new(0.5, 0.5),
+        ClipsDescendants = true,
+        Visible = false,
+        ZIndex = 20
+    }, {
+        Utility.Create("UICorner", {CornerRadius = UDim.new(0, 10)}),
+        Utility.Create("UIStroke", {Color = self.ThemeColor, Thickness = 1, Transparency = 0.4})
+    })
+    self:AddThemeElement(panel:FindFirstChildOfClass("UIStroke"), "Color")
+
+    local bar = Utility.Create("Frame", {
+        Name = "PanelBar",
+        Parent = panel,
+        BackgroundColor3 = Color3.fromRGB(20, 20, 35),
+        BackgroundTransparency = 0.3,
+        BorderSizePixel = 0,
+        Size = UDim2.new(1, 0, 0, 34),
+        ZIndex = 21
+    }, {Utility.Create("UICorner", {CornerRadius = UDim.new(0, 10)})})
+    Utility.Create("Frame", {
+        Parent = bar,
+        BackgroundColor3 = Color3.fromRGB(20, 20, 35),
+        BackgroundTransparency = 0.3,
+        BorderSizePixel = 0,
+        Size = UDim2.new(1, 0, 0, 12),
+        Position = UDim2.new(0, 0, 1, -12),
+        ZIndex = 20
+    })
+    Utility.Create("ImageLabel", {
+        Parent = bar,
+        BackgroundTransparency = 1,
+        Size = UDim2.new(0, 18, 0, 18),
+        Position = UDim2.new(0, 10, 0.5, 0),
+        AnchorPoint = Vector2.new(0, 0.5),
+        Image = tab.IconAsset,
+        ImageColor3 = self.ThemeColor,
+        ZIndex = 22
+    })
+    Utility.Create("TextLabel", {
+        Parent = bar,
+        BackgroundTransparency = 1,
+        Size = UDim2.new(1, -80, 1, 0),
+        Position = UDim2.new(0, 34, 0, 0),
+        Font = Enum.Font.GothamSemibold,
+        Text = tab.Name,
+        TextColor3 = Color3.fromRGB(255, 255, 255),
+        TextSize = 14,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        TextTruncate = Enum.TextTruncate.AtEnd,
+        ZIndex = 22
+    })
+    local closeBtn = Utility.Create("TextButton", {
+        Parent = bar,
+        BackgroundColor3 = Color3.fromRGB(255, 80, 80),
+        BackgroundTransparency = 0.5,
+        BorderSizePixel = 0,
+        Size = UDim2.new(0, 22, 0, 22),
+        Position = UDim2.new(1, -30, 0.5, 0),
+        AnchorPoint = Vector2.new(0, 0.5),
+        Font = Enum.Font.GothamBold,
+        Text = "×",
+        TextColor3 = Color3.fromRGB(255, 255, 255),
+        TextSize = 16,
+        ZIndex = 22
+    }, {Utility.Create("UICorner", {CornerRadius = UDim.new(0, 6)})})
+    closeBtn.MouseButton1Click:Connect(function()
+        Utility.PlaySound(Sounds.Click, 0.2)
+        panel.Visible = false
+        if tab.Indicator then tab.Indicator.Visible = false end
+        Utility.Tween(tab.Button, {BackgroundTransparency = 0.5}, 0.2)
+        if self.SelectedTab == tab then self.SelectedTab = nil end
+    end)
+
+    -- 页面移入面板
+    local page = tab.Page
+    page.Parent = panel
+    page.Size = UDim2.new(1, -16, 1, -46)
+    page.Position = UDim2.new(0, 8, 0, 40)
+    page.Visible = true
+
+    -- 面板独立拖动
+    local dragging, dragStart, startPos = false, nil, nil
+    bar.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = true
+            dragStart = input.Position
+            startPos = panel.Position
+        end
+    end)
+    bar.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = false
+        end
+    end)
+    self:TrackConn(UserInputService.InputChanged:Connect(function(input)
+        if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+            local delta = input.Position - dragStart
+            panel.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+        end
+    end))
+
+    tab.Panel = panel
+end
+
+-- Float 布局：开/关某个 Tab 的浮动面板（再点最前面的面板 = 收起）
+function QuantumUI:ToggleFloatPanel(tab)
+    if not tab.Panel then
+        self:_BuildFloatPanel(tab)
+    end
+    local panel = tab.Panel
+    if panel.Visible and panel.ZIndex == (self._FloatTopZ or 20) then
+        panel.Visible = false
+        if tab.Indicator then tab.Indicator.Visible = false end
+        Utility.Tween(tab.Button, {BackgroundTransparency = 0.5}, 0.2)
+        if self.SelectedTab == tab then self.SelectedTab = nil end
+    else
+        self._FloatTopZ = (self._FloatTopZ or 20) + 1
+        panel.ZIndex = self._FloatTopZ
+        panel.Visible = true
+        if tab.Indicator then tab.Indicator.Visible = true end
+        Utility.Tween(tab.Button, {BackgroundTransparency = 0.2}, 0.2)
+        self.SelectedTab = tab
+    end
+end
+
+-- ─────────────────────────────────────────────
+-- 布局 6: Vape 风格（方角扁平 + 顶栏文字Tab + 下划线指示）
+-- ─────────────────────────────────────────────
+function QuantumUI:BuildLayout_Vape()
+    self.TabStyle = "VapeTabs"
+    self.TabListHorizontal = true
+    self.CornerRadius = 0      -- 方角
+    self.FlatBorder = true     -- 纯色描边（无彩虹渐变）
+    self:CreateWindowShell()
+
+    -- 标题行（扁平无圆角）
+    local topBar = Utility.Create("Frame", {
+        Name = "TopBar",
+        Parent = self.MainFrame,
+        BackgroundColor3 = Color3.fromRGB(20, 20, 35),
+        BackgroundTransparency = 0.15,
+        BorderSizePixel = 0,
+        Size = UDim2.new(1, 0, 0, 38),
+        ZIndex = 10
+    })
+    Utility.Create("TextLabel", {
+        Parent = topBar,
+        BackgroundTransparency = 1,
+        Size = UDim2.new(0, 26, 1, 0),
+        Position = UDim2.new(0, 12, 0, 0),
+        Font = Enum.Font.GothamBold,
+        Text = "Q",
+        TextColor3 = self.ThemeColor,
+        TextSize = 19,
+        ZIndex = 11
+    })
+    Utility.Create("TextLabel", {
+        Parent = topBar,
+        BackgroundTransparency = 1,
+        Size = UDim2.new(0, 260, 0, 16),
+        Position = UDim2.new(0, 42, 0.5, 0),
+        AnchorPoint = Vector2.new(0, 0.5),
+        Font = Enum.Font.GothamBold,
+        Text = self.Title,
+        TextColor3 = Color3.fromRGB(255, 255, 255),
+        TextSize = 14,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        TextTruncate = Enum.TextTruncate.AtEnd,
+        ZIndex = 11
+    })
+    local minimizeBtn, maximizeBtn, closeBtn = self:CreateControlCluster(topBar, 6)
+    self.TopBar = topBar
+
+    -- Tab 行（横向文字 Tab + 底部分隔线）
+    self.TabList = Utility.Create("ScrollingFrame", {
+        Name = "TabList",
+        Parent = self.MainFrame,
+        BackgroundTransparency = 1,
+        BorderSizePixel = 0,
+        Size = UDim2.new(1, -16, 0, 30),
+        Position = UDim2.new(0, 8, 0, 40),
+        CanvasSize = UDim2.new(0, 0, 0, 0),
+        ScrollBarThickness = 2,
+        ScrollBarImageColor3 = self.ThemeColor,
+        ScrollingDirection = Enum.ScrollingDirection.X,
+        ZIndex = 6
+    }, {
+        Utility.Create("UIListLayout", {
+            SortOrder = Enum.SortOrder.LayoutOrder,
+            FillDirection = Enum.FillDirection.Horizontal,
+            Padding = UDim.new(0, 2),
+            VerticalAlignment = Enum.VerticalAlignment.Center
+        })
+    })
+    self:AddThemeElement(self.TabList, "ScrollBarImageColor3")
+    local vapeLay = self.TabList:FindFirstChildOfClass("UIListLayout")
+    if vapeLay then
+        vapeLay:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+            self.TabList.CanvasSize = UDim2.new(0, vapeLay.AbsoluteContentSize.X + 10, 0, 0)
+        end)
+    end
+    Utility.Create("Frame", {
+        Parent = self.MainFrame,
+        BackgroundColor3 = Color3.fromRGB(50, 50, 65),
+        BorderSizePixel = 0,
+        Size = UDim2.new(1, 0, 0, 1),
+        Position = UDim2.new(0, 0, 0, 72),
+        ZIndex = 7
+    })
+
+    -- 内容区（方角）
+    self.ContentContainer = Utility.Create("Frame", {
+        Name = "ContentContainer",
+        Parent = self.MainFrame,
+        BackgroundTransparency = 1,
+        BorderSizePixel = 0,
+        Size = UDim2.new(1, 0, 1, -76),
+        Position = UDim2.new(0, 0, 0, 74),
+        ZIndex = 5
+    })
+
+    self:FinishWindow(minimizeBtn, maximizeBtn, closeBtn)
+end
+
+-- ═══════════════════════════════════════════════════════════════════
+--  LAYOUT / THEME SWITCH ENGINE (v3.3)
+-- ═══════════════════════════════════════════════════════════════════
+
+-- 布局/主题偏好持久化
+function QuantumUI:_SaveLayoutPrefs()
+    ConfigSystem.SaveUI("LayoutPrefs", {Layout = self.CurrentLayout, Theme = self.ThemeName})
+end
+
+-- 布局自然尺寸（Default 尊重用户传入的 Size）
+function QuantumUI:_LayoutNaturalSize(name)
+    if IsMobile then
+        if name == "Float" then return UDim2.new(0.85, 0, 0, 420) end
+        return UDim2.new(0.95, 0, 0.85, 0)
+    end
+    local sizes = {
+        Default = self._UserSize,
+        Rail = UDim2.new(0, 560, 0, 430),
+        TopBar = UDim2.new(0, 730, 0, 480),
+        Grid = UDim2.new(0, 640, 0, 470),
+        Float = UDim2.new(0, 270, 0, 430),
+        Vape = UDim2.new(0, 650, 0, 440),
+    }
+    return sizes[name] or self._UserSize
+end
+
+-- 销毁当前布局框架（Tab 页面已被摘出，控件状态无损）
+function QuantumUI:_TeardownLayout()
+    for _, c in ipairs(self._LayoutConnections) do
+        pcall(function() c:Disconnect() end)
+    end
+    self._LayoutConnections = {}
+    for _, t in ipairs(self.Tabs) do
+        if t._Tip then t._Tip:Destroy() t._Tip = nil end
+        if t.Panel then t.Panel:Destroy() t.Panel = nil end
+        t.Button = nil; t.Icon = nil; t.TextLabel = nil; t.Indicator = nil
+        t.PageHolder = nil; t.ColB = nil
+    end
+    if self.MainFrame then
+        self.MainFrame:Destroy()
+        self.MainFrame = nil
+    end
+    self._HomeView = nil
+    self._DetailView = nil
+    self._DetailTitle = nil
+    self._GridDetail = false
+    self.TabList = nil
+    self.ContentContainer = nil
+    self.TopBar = nil
+    self.TabContainer = nil
+    self.TabStyle = nil
+    self.TabListHorizontal = nil
+    self:RefreshTheme()  -- 顺带清理已销毁的 ThemeElements
+end
+
+-- 实时切换布局：Tab 页面整体搬运，控件/回调/数值全部保留
+function QuantumUI:SwitchLayout(layoutName)
+    if self._Switching then return end
+    if not LayoutDisplay[layoutName] or layoutName == self.CurrentLayout then return end
+    self._Switching = true
+
+    -- 保存状态（位置/选中/尺寸）
+    local savedPos = (self.MainFrame and self.MainFrame.Position) or UDim2.new(0.5, 0, 0.5, 0)
+    if self.Maximized and self.SavedPosition then savedPos = self.SavedPosition end
+    self.Maximized = false
+    self.CanDrag = true
+    local selectedName = self.SelectedTab and self.SelectedTab.Name
+
+    -- 旧布局特殊结构还原（TopBar 双栏合并回单页）
+    if self.CurrentLayout == "TopBar" then
+        for _, t in ipairs(self.Tabs) do self:_MergeColumnsIntoPage(t) end
+    end
+
+    -- 摘出所有 Tab 页面（控件实例原样保留）
+    local holder = Instance.new("Folder")
+    holder.Name = "_TabPages"
+    holder.Parent = self.ScreenGui
+    for _, t in ipairs(self.Tabs) do
+        if t.Page then t.Page.Parent = holder end
+    end
+
+    self:_TeardownLayout()
+
+    -- 构建新布局
+    self.CurrentLayout = layoutName
+    self.Size = self:_LayoutNaturalSize(layoutName)
+    self:CreateMainWindow(true)
+
+    -- 恢复所有 Tab（新风格按钮 + 页面搬运）
+    for _, t in ipairs(self.Tabs) do
+        local page = t.Page
+        if page then
+            page.Parent = self.ContentContainer
+            page.Size = UDim2.new(1, -20, 1, -20)
+            page.Position = UDim2.new(0, 10, 0, 10)
+            page.Visible = false
+        end
+        self:CreateTabButton(t, {Name = t.Name, Icon = t.IconAsset})
+    end
+    holder:Destroy()
+
+    -- TopBar：双栏拆分
+    if layoutName == "TopBar" then
+        for _, t in ipairs(self.Tabs) do self:_SplitPageIntoColumns(t) end
+    end
+
+    -- 恢复选中状态
+    self.SelectedTab = nil
+    if layoutName == "Grid" then
+        self:ShowGridHome()
+    else
+        local target = nil
+        for _, t in ipairs(self.Tabs) do
+            if t.Name == selectedName then target = t break end
+        end
+        if not target then target = self.Tabs[1] end
+        if target then
+            if layoutName == "Float" then
+                self:ToggleFloatPanel(target)
+            else
+                self:SelectTab(target)
+            end
+        end
+    end
+
+    -- 位置保持（避免跳到屏幕中心）
+    if self.MainFrame then self.MainFrame.Position = savedPos end
+    self:ApplyThemeToTree(self.MainFrame)
+    for _, t in ipairs(self.Tabs) do
+        if t.Panel then self:ApplyThemeToTree(t.Panel) end
+    end
+
+    self:_SaveLayoutPrefs()
+    self._Switching = false
+    Utility.PlaySound(Sounds.Open, 0.4)
+    self:Notify({
+        Title = "布局已切换",
+        Content = LayoutDisplay[layoutName] .. " · " .. (self.ActiveTheme and self.ActiveTheme.DisplayName or ""),
+        Duration = 2,
+        Type = "Info"
+    })
+end
+
+-- 实时切换配色主题
+function QuantumUI:SwitchTheme(themeName)
+    if not Themes[themeName] or themeName == self.ThemeName then return end
+    self.ThemeName = themeName
+    self.ActiveTheme = Themes[themeName]
+    self.ThemeColor = self.ActiveTheme.Accent
+    QuantumUI.ThemeColor = self.ThemeColor
+    self:RefreshTheme()
+    self:ApplyThemeToTree(self.MainFrame)
+    for _, t in ipairs(self.Tabs) do
+        if t.Panel then self:ApplyThemeToTree(t.Panel) end
+    end
+    self:_SaveLayoutPrefs()
+    self:Notify({Title = "主题已切换", Content = self.ActiveTheme.DisplayName, Duration = 2, Type = "Info"})
 end
 
 -- NEW: Set custom background
@@ -1134,19 +2321,19 @@ function QuantumUI:SetupBorderDragging()
                 dragging = false
             end
         end)
-        
-        UserInputService.InputChanged:Connect(function(input)
+
+        self:TrackConn(UserInputService.InputChanged:Connect(function(input)
             if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
                 local delta = input.Position - dragStart
                 self.MainFrame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
             end
-        end)
+        end))
     end
 end
 
 function QuantumUI:SetupDragging()
     local dragging, dragStart, startPos = false, nil, nil
-    
+
     self.TopBar.InputBegan:Connect(function(input)
         if self.Maximized or not self.CanDrag then return end
         if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
@@ -1155,19 +2342,19 @@ function QuantumUI:SetupDragging()
             startPos = self.MainFrame.Position
         end
     end)
-    
+
     self.TopBar.InputEnded:Connect(function(input)
         if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
             dragging = false
         end
     end)
-    
-    UserInputService.InputChanged:Connect(function(input)
+
+    self:TrackConn(UserInputService.InputChanged:Connect(function(input)
         if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
             local delta = input.Position - dragStart
             self.MainFrame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
         end
-    end)
+    end))
 end
 
 function QuantumUI:SetupControlButtons(minimize, maximize, close)
@@ -1307,12 +2494,12 @@ function QuantumUI:RestoreFromMinimize()
 end
 
 function QuantumUI:SetupKeybind()
-    UserInputService.InputBegan:Connect(function(input, processed)
+    self:TrackConn(UserInputService.InputBegan:Connect(function(input, processed)
         if processed then return end
         if input.KeyCode == self.Keybind then
             if self.Minimized then self:RestoreFromMinimize() else self:MinimizeToButton() end
         end
-    end)
+    end))
 end
 
 function QuantumUI:Destroy()
@@ -1424,62 +2611,9 @@ function QuantumUI:AddTab(options)
     options = options or {}
     local tabName = options.Name or "Tab"
     local tabIcon = options.Icon or "rbxassetid://6031280882"
-    
-    local tab = {Name = tabName, Elements = {}}
-    
-    local iconOffset = IsMobile and 12 or 10
-    local iconSize = 20
-    local textStartX = iconOffset + iconSize + 8
 
-    local tabButton = Utility.Create("TextButton", {
-        Parent = self.TabList,
-        BackgroundColor3 = Color3.fromRGB(30, 30, 45),
-        BackgroundTransparency = 0.5,
-        BorderSizePixel = 0,
-        Size = UDim2.new(1, 0, 0, IsMobile and 45 or 40),
-        Text = "",
-        ZIndex = 7
-    }, {Utility.Create("UICorner", {CornerRadius = UDim.new(0, 8)})})
+    local tab = {Name = tabName, IconAsset = tabIcon, Elements = {}}
 
-    local icon = Utility.Create("ImageLabel", {
-        Parent = tabButton,
-        BackgroundTransparency = 1,
-        Size = UDim2.new(0, iconSize, 0, iconSize),
-        Position = UDim2.new(0, iconOffset, 0.5, 0),
-        AnchorPoint = Vector2.new(0, 0.5),
-        Image = tabIcon,
-        ImageColor3 = Color3.fromRGB(200, 200, 200),
-        ZIndex = 8
-    })
-
-    local textLabel
-    if not IsMobile then
-        textLabel = Utility.Create("TextLabel", {
-            Parent = tabButton,
-            BackgroundTransparency = 1,
-            Size = UDim2.new(1, -textStartX - 5, 1, 0),
-            Position = UDim2.new(0, textStartX, 0, 0),
-            Font = Enum.Font.GothamSemibold,
-            Text = tabName,
-            TextColor3 = Color3.fromRGB(200, 200, 200),
-            TextSize = 14,
-            TextXAlignment = Enum.TextXAlignment.Left,
-            TextTruncate = Enum.TextTruncate.AtEnd,
-            ZIndex = 9
-        })
-    end
-    
-    local indicator = Utility.Create("Frame", {
-        Parent = tabButton,
-        BackgroundColor3 = self.ThemeColor,
-        BorderSizePixel = 0,
-        Size = UDim2.new(0, 3, 0.6, 0),
-        Position = UDim2.new(0, 0, 0.2, 0),
-        Visible = false,
-        ZIndex = 8
-    }, {Utility.Create("UICorner", {CornerRadius = UDim.new(0, 2)})})
-    self:AddThemeElement(indicator, "BackgroundColor3")
-    
     local tabPage = Utility.Create("ScrollingFrame", {
         Parent = self.ContentContainer,
         BackgroundTransparency = 1,
@@ -1507,37 +2641,17 @@ function QuantumUI:AddTab(options)
             end
         end)
     end
-    
-    tab.Button = tabButton
+
     tab.Page = tabPage
-    tab.Indicator = indicator
-    tab.Icon = icon
-    tab.TextLabel = textLabel
-    
-    tabButton.MouseButton1Click:Connect(function()
-        Utility.PlaySound(Sounds.Click, 0.3)
-        self:SelectTab(tab)
-    end)
-    
-    tabButton.MouseEnter:Connect(function()
-        Utility.PlaySound(Sounds.Hover, 0.1)
-        Utility.Tween(tabButton, {BackgroundTransparency = 0.3}, 0.2)
-    end)
-    tabButton.MouseLeave:Connect(function()
-        if self.SelectedTab ~= tab then
-            Utility.Tween(tabButton, {BackgroundTransparency = 0.5}, 0.2)
-        end
-    end)
-    
+    self:CreateTabButton(tab, {Name = tabName, Icon = tabIcon})
+
     table.insert(self.Tabs, tab)
-    
-    local layout = self.TabList:FindFirstChildOfClass("UIListLayout")
-    layout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
-        self.TabList.CanvasSize = UDim2.new(0, 0, 0, layout.AbsoluteContentSize.Y + 10)
-    end)
-    
-    if #self.Tabs == 1 then self:SelectTab(tab) end
-    
+
+    -- Grid/Float 布局不自动进入详情，保持主页/Hub 视图
+    if #self.Tabs == 1 and self.CurrentLayout ~= "Grid" and self.CurrentLayout ~= "Float" then
+        self:SelectTab(tab)
+    end
+
     local window = self
     function tab:AddSection(opts) return window:CreateSection(tabPage, opts) end
     function tab:AddButton(opts) return window:CreateButton(tabPage, opts) end
@@ -1552,27 +2666,334 @@ function QuantumUI:AddTab(options)
     function tab:AddKeyAuth(opts) return window:CreateKeyAuth(tabPage, opts) end
     function tab:AddLabel(opts) return window:CreateLabel(tabPage, opts) end
     function tab:AddParagraph(opts) return window:CreateParagraph(tabPage, opts) end
-    
+
     return tab
+end
+
+-- ═══════════════════════════════════════════════════════════════════
+--  v3.3: 风格化 Tab 按钮工厂（List / Rail / Pills / Cards / VapeTabs）
+--  布局构建器通过 self.TabStyle 指定风格，AddTab 与布局重建共用
+-- ═══════════════════════════════════════════════════════════════════
+function QuantumUI:CreateTabButton(tab, opts)
+    opts = opts or {}
+    local tabName = opts.Name or tab.Name or "Tab"
+    local tabIcon = opts.Icon or tab.IconAsset or "rbxassetid://6031280882"
+    local style = self.TabStyle or "List"
+    tab.IconAsset = tabIcon
+
+    local btn, icon, textLabel, indicator
+    local btnW = math.max(64, #tabName * 8 + 30)
+
+    if style == "Rail" then
+        -- 图标-only 按钮 + 悬停提示（提示挂 ScreenGui 层避免被裁剪）
+        btn = Utility.Create("TextButton", {
+            Parent = self.TabList,
+            BackgroundColor3 = Color3.fromRGB(30, 30, 45),
+            BackgroundTransparency = 0.5,
+            BorderSizePixel = 0,
+            Size = UDim2.new(1, 0, 0, 46),
+            Text = "",
+            ZIndex = 7
+        }, {Utility.Create("UICorner", {CornerRadius = UDim.new(0, 10)})})
+        icon = Utility.Create("ImageLabel", {
+            Parent = btn,
+            BackgroundTransparency = 1,
+            Size = UDim2.new(0, 22, 0, 22),
+            Position = UDim2.new(0.5, 0, 0.5, -3),
+            AnchorPoint = Vector2.new(0.5, 0.5),
+            Image = tabIcon,
+            ImageColor3 = Color3.fromRGB(200, 200, 200),
+            ZIndex = 8
+        })
+        indicator = Utility.Create("Frame", {
+            Parent = btn,
+            BackgroundColor3 = self.ThemeColor,
+            BorderSizePixel = 0,
+            Size = UDim2.new(0.55, 0, 0, 3),
+            Position = UDim2.new(0.225, 0, 1, -6),
+            Visible = false,
+            ZIndex = 8
+        }, {Utility.Create("UICorner", {CornerRadius = UDim.new(1, 0)})})
+
+        local tip
+        btn.MouseEnter:Connect(function()
+            Utility.PlaySound(Sounds.Hover, 0.1)
+            Utility.Tween(btn, {BackgroundTransparency = 0.3}, 0.2)
+            if tab._Tip then tab._Tip:Destroy() end
+            tip = Utility.Create("TextLabel", {
+                Parent = self.ScreenGui,
+                BackgroundColor3 = Color3.fromRGB(25, 25, 40),
+                BackgroundTransparency = 0.05,
+                BorderSizePixel = 0,
+                Size = UDim2.new(0, math.max(60, #tabName * 9 + 24), 0, 30),
+                Position = UDim2.new(0, btn.AbsolutePosition.X + btn.AbsoluteSize.X + 10, 0, btn.AbsolutePosition.Y + 8),
+                Font = Enum.Font.GothamSemibold,
+                Text = tabName,
+                TextColor3 = Color3.fromRGB(255, 255, 255),
+                TextSize = 13,
+                ZIndex = 5000
+            }, {Utility.Create("UICorner", {CornerRadius = UDim.new(0, 6)})})
+            tab._Tip = tip
+        end)
+        btn.MouseLeave:Connect(function()
+            if tab._Tip then tab._Tip:Destroy() tab._Tip = nil end
+            if self.SelectedTab ~= tab then
+                Utility.Tween(btn, {BackgroundTransparency = 0.5}, 0.2)
+            end
+        end)
+
+    elseif style == "Pills" then
+        -- 顶栏横向药丸（文字 only，底部下划线指示）
+        btn = Utility.Create("TextButton", {
+            Parent = self.TabList,
+            BackgroundColor3 = Color3.fromRGB(30, 30, 45),
+            BackgroundTransparency = 0.5,
+            BorderSizePixel = 0,
+            Size = UDim2.new(0, btnW, 1, -6),
+            Text = "",
+            ZIndex = 7
+        }, {Utility.Create("UICorner", {CornerRadius = UDim.new(1, 0)})})
+        textLabel = Utility.Create("TextLabel", {
+            Parent = btn,
+            BackgroundTransparency = 1,
+            Size = UDim2.new(1, -8, 1, -4),
+            Position = UDim2.new(0, 4, 0, 0),
+            Font = Enum.Font.GothamSemibold,
+            Text = tabName,
+            TextColor3 = Color3.fromRGB(200, 200, 200),
+            TextSize = 13,
+            TextTruncate = Enum.TextTruncate.AtEnd,
+            ZIndex = 8
+        })
+        indicator = Utility.Create("Frame", {
+            Parent = btn,
+            BackgroundColor3 = self.ThemeColor,
+            BorderSizePixel = 0,
+            Size = UDim2.new(0.5, 0, 0, 2),
+            Position = UDim2.new(0.25, 0, 1, -1),
+            Visible = false,
+            ZIndex = 8
+        })
+
+    elseif style == "Cards" then
+        -- 网格卡片（图标 + 名称，顶部彩条指示）
+        btn = Utility.Create("TextButton", {
+            Parent = self.TabList,
+            BackgroundColor3 = Color3.fromRGB(25, 25, 40),
+            BackgroundTransparency = 0.2,
+            BorderSizePixel = 0,
+            Size = UDim2.new(0, 140, 0, 104),
+            Text = "",
+            ZIndex = 7
+        }, {
+            Utility.Create("UICorner", {CornerRadius = UDim.new(0, 10)}),
+            Utility.Create("UIStroke", {Color = Color3.fromRGB(60, 60, 85), Thickness = 1, Transparency = 0.4})
+        })
+        icon = Utility.Create("ImageLabel", {
+            Parent = btn,
+            BackgroundTransparency = 1,
+            Size = UDim2.new(0, 38, 0, 38),
+            Position = UDim2.new(0.5, 0, 0, 20),
+            AnchorPoint = Vector2.new(0.5, 0),
+            Image = tabIcon,
+            ImageColor3 = Color3.fromRGB(200, 200, 200),
+            ZIndex = 8
+        })
+        textLabel = Utility.Create("TextLabel", {
+            Parent = btn,
+            BackgroundTransparency = 1,
+            Size = UDim2.new(1, -12, 0, 18),
+            Position = UDim2.new(0, 6, 1, -34),
+            Font = Enum.Font.GothamSemibold,
+            Text = tabName,
+            TextColor3 = Color3.fromRGB(200, 200, 200),
+            TextSize = 13,
+            TextTruncate = Enum.TextTruncate.AtEnd,
+            ZIndex = 8
+        })
+        indicator = Utility.Create("Frame", {
+            Parent = btn,
+            BackgroundColor3 = self.ThemeColor,
+            BorderSizePixel = 0,
+            Size = UDim2.new(0.6, 0, 0, 3),
+            Position = UDim2.new(0.2, 0, 0, 6),
+            Visible = false,
+            ZIndex = 8
+        }, {Utility.Create("UICorner", {CornerRadius = UDim.new(1, 0)})})
+        local cardStroke = btn:FindFirstChildOfClass("UIStroke")
+        btn.MouseEnter:Connect(function()
+            Utility.PlaySound(Sounds.Hover, 0.1)
+            if cardStroke then Utility.Tween(cardStroke, {Transparency = 0.05}, 0.2) end
+        end)
+        btn.MouseLeave:Connect(function()
+            if cardStroke then Utility.Tween(cardStroke, {Transparency = 0.4}, 0.2) end
+        end)
+
+    elseif style == "VapeTabs" then
+        -- Vape 风格：透明底、方角、底部下划线指示
+        btn = Utility.Create("TextButton", {
+            Parent = self.TabList,
+            BackgroundColor3 = Color3.fromRGB(30, 30, 45),
+            BackgroundTransparency = 1,
+            BorderSizePixel = 0,
+            Size = UDim2.new(0, btnW - 8, 1, 0),
+            Text = "",
+            ZIndex = 7
+        })
+        textLabel = Utility.Create("TextLabel", {
+            Parent = btn,
+            BackgroundTransparency = 1,
+            Size = UDim2.new(1, -10, 1, -2),
+            Position = UDim2.new(0, 5, 0, 0),
+            Font = Enum.Font.GothamMedium,
+            Text = tabName,
+            TextColor3 = Color3.fromRGB(200, 200, 200),
+            TextSize = 13,
+            TextTruncate = Enum.TextTruncate.AtEnd,
+            ZIndex = 8
+        })
+        indicator = Utility.Create("Frame", {
+            Parent = btn,
+            BackgroundColor3 = self.ThemeColor,
+            BorderSizePixel = 0,
+            Size = UDim2.new(1, 0, 0, 2),
+            Position = UDim2.new(0, 0, 1, -2),
+            Visible = false,
+            ZIndex = 8
+        })
+        btn.MouseEnter:Connect(function()
+            Utility.PlaySound(Sounds.Hover, 0.1)
+            Utility.Tween(btn, {BackgroundTransparency = 0.6}, 0.15)
+        end)
+        btn.MouseLeave:Connect(function()
+            if self.SelectedTab ~= tab then
+                Utility.Tween(btn, {BackgroundTransparency = 1}, 0.15)
+            end
+        end)
+
+    else
+        -- List（经典默认 / Float Hub 复用）：图标 + 文字 + 左侧指示条
+        local iconOffset = IsMobile and 12 or 10
+        local iconSize = 20
+        local textStartX = iconOffset + iconSize + 8
+        btn = Utility.Create("TextButton", {
+            Parent = self.TabList,
+            BackgroundColor3 = Color3.fromRGB(30, 30, 45),
+            BackgroundTransparency = 0.5,
+            BorderSizePixel = 0,
+            Size = UDim2.new(1, 0, 0, IsMobile and 45 or 40),
+            Text = "",
+            ZIndex = 7
+        }, {Utility.Create("UICorner", {CornerRadius = UDim.new(0, 8)})})
+        icon = Utility.Create("ImageLabel", {
+            Parent = btn,
+            BackgroundTransparency = 1,
+            Size = UDim2.new(0, iconSize, 0, iconSize),
+            Position = UDim2.new(0, iconOffset, 0.5, 0),
+            AnchorPoint = Vector2.new(0, 0.5),
+            Image = tabIcon,
+            ImageColor3 = Color3.fromRGB(200, 200, 200),
+            ZIndex = 8
+        })
+        if not IsMobile then
+            textLabel = Utility.Create("TextLabel", {
+                Parent = btn,
+                BackgroundTransparency = 1,
+                Size = UDim2.new(1, -textStartX - 5, 1, 0),
+                Position = UDim2.new(0, textStartX, 0, 0),
+                Font = Enum.Font.GothamSemibold,
+                Text = tabName,
+                TextColor3 = Color3.fromRGB(200, 200, 200),
+                TextSize = 14,
+                TextXAlignment = Enum.TextXAlignment.Left,
+                TextTruncate = Enum.TextTruncate.AtEnd,
+                ZIndex = 9
+            })
+        end
+        indicator = Utility.Create("Frame", {
+            Parent = btn,
+            BackgroundColor3 = self.ThemeColor,
+            BorderSizePixel = 0,
+            Size = UDim2.new(0, 3, 0.6, 0),
+            Position = UDim2.new(0, 0, 0.2, 0),
+            Visible = false,
+            ZIndex = 8
+        }, {Utility.Create("UICorner", {CornerRadius = UDim.new(0, 2)})})
+        btn.MouseEnter:Connect(function()
+            Utility.PlaySound(Sounds.Hover, 0.1)
+            Utility.Tween(btn, {BackgroundTransparency = 0.3}, 0.2)
+        end)
+        btn.MouseLeave:Connect(function()
+            if self.SelectedTab ~= tab then
+                Utility.Tween(btn, {BackgroundTransparency = 0.5}, 0.2)
+            end
+        end)
+    end
+
+    tab.Button = btn
+    tab.Icon = icon
+    tab.TextLabel = textLabel
+    tab.Indicator = indicator
+    if indicator then self:AddThemeElement(indicator, "BackgroundColor3") end
+
+    btn.MouseButton1Click:Connect(function()
+        Utility.PlaySound(Sounds.Click, 0.3)
+        if self.CurrentLayout == "Grid" then
+            self._GridDetail = true
+            self:SelectTab(tab)
+        elseif self.CurrentLayout == "Float" then
+            self:ToggleFloatPanel(tab)
+        else
+            self:SelectTab(tab)
+        end
+    end)
+
+    -- Pills 风格悬停（其余风格在上面分支内联处理）
+    if style == "Pills" then
+        btn.MouseEnter:Connect(function()
+            Utility.PlaySound(Sounds.Hover, 0.1)
+            Utility.Tween(btn, {BackgroundTransparency = 0.3}, 0.2)
+        end)
+        btn.MouseLeave:Connect(function()
+            if self.SelectedTab ~= tab then
+                Utility.Tween(btn, {BackgroundTransparency = 0.5}, 0.2)
+            end
+        end)
+    end
 end
 
 function QuantumUI:SelectTab(tab)
     for _, t in ipairs(self.Tabs) do
         t.Page.Visible = false
-        t.Indicator.Visible = false
+        if t.PageHolder then t.PageHolder.Visible = false end
+        if t.Indicator then t.Indicator.Visible = false end
         Utility.Tween(t.Button, {BackgroundTransparency = 0.5}, 0.2)
-        Utility.Tween(t.Icon, {ImageColor3 = Color3.fromRGB(200, 200, 200)}, 0.2)
+        if t.Icon then
+            Utility.Tween(t.Icon, {ImageColor3 = Color3.fromRGB(200, 200, 200)}, 0.2)
+        end
         if t.TextLabel then
             Utility.Tween(t.TextLabel, {TextColor3 = Color3.fromRGB(200, 200, 200)}, 0.2)
         end
     end
     tab.Page.Visible = true
-    tab.Indicator.Visible = true
+    if tab.PageHolder then tab.PageHolder.Visible = true end
+    if tab.Indicator then tab.Indicator.Visible = true end
     self.SelectedTab = tab
     Utility.Tween(tab.Button, {BackgroundTransparency = 0.2}, 0.2)
-    Utility.Tween(tab.Icon, {ImageColor3 = self.ThemeColor}, 0.2)
+    if tab.Icon then
+        Utility.Tween(tab.Icon, {ImageColor3 = self.ThemeColor}, 0.2)
+    end
     if tab.TextLabel then
         Utility.Tween(tab.TextLabel, {TextColor3 = Color3.fromRGB(255, 255, 255)}, 0.2)
+    end
+
+    -- Grid 布局：主页网格 ⇄ 详情视图 切换
+    if self.CurrentLayout == "Grid" then
+        local showDetail = self._GridDetail == true
+        if self._HomeView then self._HomeView.Visible = not showDetail end
+        if self._DetailView then self._DetailView.Visible = showDetail end
+        if not showDetail then tab.Page.Visible = false end
+        if showDetail and self._DetailTitle then self._DetailTitle.Text = tab.Name end
     end
 end
 
@@ -3832,17 +5253,65 @@ function QuantumUI:CreateSettingsTab()
     })
     
     -- ═══════════════════════════════════════
+    -- LAYOUT & THEME SWITCHER (v3.3)
+    -- ═══════════════════════════════════════
+    settingsTab:AddSection({Name = "🧭 外观风格 Layout & Theme"})
+
+    local layoutItems, themeItems = {}, {}
+    for _, k in ipairs(LayoutOrder) do table.insert(layoutItems, LayoutDisplay[k]) end
+    for _, k in ipairs(ThemeOrder) do table.insert(themeItems, Themes[k].DisplayName) end
+
+    settingsTab:AddDropdown({
+        Name = "布局样式 Layout",
+        Items = layoutItems,
+        Default = LayoutDisplay[self.CurrentLayout] or layoutItems[1],
+        Callback = function(selected)
+            for k, disp in pairs(LayoutDisplay) do
+                if disp == selected then
+                    task.defer(function() self:SwitchLayout(k) end)
+                    break
+                end
+            end
+        end
+    })
+
+    settingsTab:AddDropdown({
+        Name = "配色主题 Theme",
+        Items = themeItems,
+        Default = (self.ActiveTheme and self.ActiveTheme.DisplayName) or themeItems[1],
+        Callback = function(selected)
+            for k, th in pairs(Themes) do
+                if th.DisplayName == selected then
+                    self:SwitchTheme(k)
+                    break
+                end
+            end
+        end
+    })
+
+    -- ═══════════════════════════════════════
     -- UI SETTINGS SECTION
     -- ═══════════════════════════════════════
     settingsTab:AddSection({Name = "🎨 UI Settings"})
-    
+
     self.ThemeColorPicker = settingsTab:AddColorPicker({
         Name = "Theme Color",
         Default = self.ThemeColor,
         Callback = function(color)
             self.ThemeColor = color
             QuantumUI.ThemeColor = color
+            -- 自定义色登记进 accent 重映射表，切换主题后仍能兜底换色
+            pcall(function()
+                ACCENT_KEYS[string.format("%d,%d,%d",
+                    math.floor(color.R * 255 + 0.5),
+                    math.floor(color.G * 255 + 0.5),
+                    math.floor(color.B * 255 + 0.5))] = true
+            end)
             self:RefreshTheme()
+            self:ApplyThemeToTree(self.MainFrame)
+            for _, t in ipairs(self.Tabs) do
+                if t.Panel then self:ApplyThemeToTree(t.Panel) end
+            end
         end
     })
     
