@@ -84,7 +84,7 @@ local GAME_REGISTRY = {
         PlaceIds = { 10449761463 },
         GameIds  = { 3808081382 },
         ScriptPath = "/Battlegrounds_QuantumUI.lua",
-        Description = "v3.0: 基于最近(2025-06)真实源码 Dark-X-Hub 重做 — Communicate:FireServer官方普攻(LeftClick) + 技能(Console Move) + 终极(G) + Trash垃圾农场(workspace.Map.Trash传送拾取) + Counter反琦玉检测(红色高亮) + Kamuy逃生 + AttackAura/AutoCombo/AutoUltimate + KillFarm + AutoBlock(F) + AutoReset + 移动/状态防抗 + PlayerESP(高亮+血量+距离) + 全亮 + 服务器 + Anti-AFK + 坐标 + 快捷键(T传敌/Y穿墙/U飞行/R逃生)",
+        Description = "v4.0: 修复 Communicate 参数格式(直接发字典, v3.0 包了一层数组导致技能调用全部空转) — 新增 角色切换(8角色内部名)/AutoParry自动招架/Aimbot自瞄/AutoSkill1-4/Anti-State状态清除/Counter脱离与打断/AutoSafeZone/目标选择模式/ESP追踪线/XRay透视/地图传送; 保留 AttackAura/AutoCombo/AutoUltimate/AutoBlock/TrashFarm/KillFarm/AutoReset/移动/ESP(名字+血量+距离)/全亮/服务器/Anti-AFK/坐标/快捷键",
     },
     -- 未来扩展:
     -- {
