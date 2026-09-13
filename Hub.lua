@@ -51,7 +51,7 @@ local GAME_REGISTRY = {
         Name = "Blade Ball (利刃球)",
         PlaceIds = { 13772394625, 14732610803, 14915220621, 15144787112, 15264892126, 15509350986, 16281300371 },
         ScriptPath = "/BladeBall_QuantumUI.lua",
-        Description = "利刃球辅助: AutoParry / BallESP / KillAura / Reach / AutoDash / AbilitySpam / 移动 (WalkSpeed/JumpPower/InfJump/NoClip/Fly) + 传送 + 主题",
+        Description = "v2.0: 重写远程与球检测 — 远程改用精确路径 Remotes.ParryButtonPress/AbilityButtonPress (v1.0 是暴力匹配所有含 ball/hit/attack 的远程再全部无参乱发); 球只从 workspace.Balls 取并用 realBall/target 属性判定 (v1.0 每帧遍历整个工作区靠名字猜); 格挡改用相对接近速度的撞击时间预测 (v1.0 只死判 12 studs 距离, 快球来不及); 新增 冷却读取(读 Hotbar UIGradient)/动态阈值/轨迹预测点/目标指示/键盘回退/自动技能/自动GG/Ping与格挡计数; 保留 球与玩家ESP/追踪线/Hitbox/全亮/夜间模式/移动(WalkSpeed/JumpPower/InfJump/NoClip/Fly)/玩家传送/Rejoin/ServerHop/Anti-AFK",
     },
     {
         Name = "Tower of Hell (地狱塔)",

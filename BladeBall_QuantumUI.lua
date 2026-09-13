@@ -1,75 +1,150 @@
 --[[
-    Blade Ball 辅助脚本 v1.0 (Quantum UI 版)
-    功能：AutoParry / AutoDash / AbilitySpam / KillAura / Reach / ESP / 移动修改 / AntiAFK
-    快捷键：
-        RightShift - 隐藏/显示 UI
-        P          - AutoParry 开关
-        V          - Noclip 开关
-    所有功能均通过 UI 面板操作。
-    安全承诺：不采集任何信息，不 loadstring 外部功能代码，所有逻辑本地实现。
---]]
+    Blade Ball 辅助脚本 v2.0 (Quantum UI 版)
+
+    适配 PlaceId: 13772394625 (Blade Ball / 利刃球)
+    Hub 注册的其它实例: 14732610803, 14915220621, 15144787112,
+                        15264892126, 15509350986, 16281300371
+
+    ── v2.0 相比 v1.0 的关键变化 ──────────────────────────────────────
+    [重写] 远程查找方式。
+           v1.0 遍历整个 ReplicatedStorage，把所有名字里带 ball/hit/attack/
+           swing/use/dash 的 RemoteEvent 全收集起来，然后「无参数全部 FireServer」。
+           这等于往服务器乱扔几十个远程，既不会格挡成功，也极易触发风控。
+           实际路径（三份独立公开源码一致）：
+             ReplicatedStorage.Remotes.ParryButtonPress   ← 格挡
+             ReplicatedStorage.Remotes.AbilityButtonPress ← 技能
+           备选名 ParryPress / Parry、AbilityPress / Ability。
+           调用形式 :FireServer()，无参数。
+
+    [重写] 球的查找。
+           v1.0 每帧多次遍历 workspace 全部后代做名字/形状猜测，性能开销极大。
+           实际：球都在 workspace.Balls 里，且真正的那颗带属性 realBall == true
+           （或至少有 target 属性）。只遍历这一个文件夹的子项。
+
+    [重写] 格挡判定。
+           v1.0 只判断「球距 < 12 studs」，没有速度预测，快速球来不及反应。
+           v2.0 用公开源码的相对接近速度模型：
+             dirToPlayer  = (charPos - ballPos).Unit
+             speedToward  = ballVel:Dot(dirToPlayer) - charVel:Dot(dirToPlayer)
+             timeToImpact = (dist - ParryDistance) / speedToward
+           当 timeToImpact < 阈值 或 dist <= ParryDistance 时格挡。
+
+    [新增] 格挡冷却读取。
+           游戏在 PlayerGui.Hotbar.Block 的 UIGradient.Offset.Y 上暴露格挡冷却
+           （< 0.5 表示冷却中）。v2.0 会先查冷却再决定是否按，避免空按。
+           技能冷却同理走 Hotbar.Ability。
+
+    [新增] 动态阈值：球越快，留给反应的时间窗口越紧。
+    [新增] 球轨迹预测点可视化。
+    [新增] 目标指示：判断这颗球是不是在瞄自己。
+    [新增] 键盘回退：远程不可用时用 F/Q 键兜底（公开源码做法）。
+    [新增] 自动技能 (Raging Deflection / Rapture)、自动 GG、Ping 显示、格挡计数。
+    [修复] 去掉 Luau 专有的 continue；Drawing 加可用性检测。
+    [修复] Idled 回调里不再 task.wait；销毁时补齐所有连接。
+    [修复] 单例守卫补上 _G.BB_Cleanup 调用。
+
+    ── 游戏内部结构 (三份公开源码交叉确认) ────────────────────────────
+      workspace.Balls                     球容器 (备选 workspace.Ball)
+        └ 有效球: GetAttribute("realBall") == true 或 GetAttribute("target") ~= nil
+        └ 正在瞄准你: BrickColor == "Really red"，或角色上出现 Highlight
+      workspace.Alive                     存活玩家
+      character.Abilities["Raging Deflection" / "Rapture"]   技能节点
+      PlayerGui.Hotbar.Block.border1.UIGradient    格挡冷却 (Offset.Y < 0.5 = 冷却中)
+      PlayerGui.Hotbar.Ability.border2.UIGradient  技能冷却
+
+      ReplicatedStorage.Remotes.ParryButtonPress:FireServer()
+      ReplicatedStorage.Remotes.AbilityButtonPress:FireServer()
+      ReplicatedStorage.DefaultChatSystemChatEvents.SayMessageRequest:FireServer(msg, "All")
+      game:GetService("Stats").Network.ServerStatsItem["Data Ping"]:GetValue()
+
+    ── 免责 ────────────────────────────────────────────────────────
+      仅本地逻辑，不采集信息、不 loadstring 任何外部功能代码
+      (UI 库除外，那是显示层)。使用脚本违反 Roblox 服务条款，风险自负。
+
+    快捷键: P=AutoParry  V=NoClip  U=Fly  RightShift=UI
+]]
 
 if not game:IsLoaded() then game.Loaded:Wait() end
 
 -- ══════════════════════════════════════════════════════════════════
--- 0. SINGLETON GUARD — 防止重复注入
+-- 0. SINGLETON GUARD
 -- ══════════════════════════════════════════════════════════════════
 local CoreGui = game:GetService("CoreGui")
 
-if _G.QuantumUI_Instance then
-    pcall(function() _G.QuantumUI_Instance:Destroy() end)
-    _G.QuantumUI_Instance = nil
-end
-if _G.QuantumUI_Window then
-    pcall(function() _G.QuantumUI_Window:Destroy() end)
-    _G.QuantumUI_Window = nil
-end
-for _, child in ipairs(CoreGui:GetChildren()) do
-    if child:IsA("ScreenGui") and child.Name:sub(1, 9) == "QuantumUI_" then
-        pcall(function() child:Destroy() end)
+local function purgeOld()
+    if _G.BB_Cleanup then
+        pcall(_G.BB_Cleanup)
+        _G.BB_Cleanup = nil
+    end
+    if _G.QuantumUI_Instance then
+        pcall(function() _G.QuantumUI_Instance:Destroy() end)
+        _G.QuantumUI_Instance = nil
+    end
+    if _G.QuantumUI_Window then
+        pcall(function() _G.QuantumUI_Window:Destroy() end)
+        _G.QuantumUI_Window = nil
+    end
+    local function sweep(root)
+        if not root then return end
+        for _, child in ipairs(root:GetChildren()) do
+            local n = child.Name
+            if n:sub(1, 9) == "QuantumUI" or n:sub(1, 7) == "BB_ESP" then
+                pcall(function() child:Destroy() end)
+            end
+        end
+    end
+    local ok = pcall(function() sweep(CoreGui) end)
+    if not ok then
+        sweep(game:GetService("Players").LocalPlayer:FindFirstChild("PlayerGui"))
     end
 end
+purgeOld()
 
 -- ══════════════════════════════════════════════════════════════════
 -- 1. LOAD LIBRARY
 -- ══════════════════════════════════════════════════════════════════
-local success, QuantumUI = pcall(function()
-    return loadstring(game:HttpGet("https://raw.githubusercontent.com/logz-c/Log-Hub/main/SciFi-UI-Library/source.lua"))()
+local LIB_URL = "https://raw.githubusercontent.com/logz-c/Log-Hub/main/SciFi-UI-Library/source.lua"
+
+local okLib, QuantumUI = pcall(function()
+    return loadstring(game:HttpGet(LIB_URL))()
 end)
 
-if not success then
-    warn("[Blade Ball] 加载 Quantum UI 库失败:", QuantumUI)
-    warn("[Blade Ball] 尝试使用本地源码...")
-    local localSuccess, localQuantumUI = pcall(function()
-        local localPath = "SciFi-UI-Library/source.lua"
-        if isfile and isfile(localPath) then
-            return loadstring(readfile(localPath))()
+if not okLib or type(QuantumUI) ~= "table" then
+    warn("[BladeBall] 在线加载 Quantum UI 失败:", QuantumUI)
+    local okLocal, localLib = pcall(function()
+        if isfile and isfile("SciFi-UI-Library/source.lua") then
+            return loadstring(readfile("SciFi-UI-Library/source.lua"))()
         end
         return nil
     end)
-    if not localSuccess or not localQuantumUI then
-        warn("[Blade Ball] 无法加载 UI 库，脚本终止")
+    if not okLocal or type(localLib) ~= "table" then
+        warn("[BladeBall] 无法加载 UI 库，脚本终止")
         return
     end
-    QuantumUI = localQuantumUI
+    QuantumUI = localLib
 end
 
-print("[Blade Ball] Quantum UI v" .. QuantumUI.Version .. " 加载成功")
+print("[BladeBall] Quantum UI v" .. tostring(QuantumUI.Version) .. " 加载成功")
 
 -- ══════════════════════════════════════════════════════════════════
--- 2. ROBLOX SERVICES
+-- 2. SERVICES
 -- ══════════════════════════════════════════════════════════════════
-local Players = game:GetService("Players")
-local LocalPlayer = Players.LocalPlayer
-local RunService = game:GetService("RunService")
-local UserInputService = game:GetService("UserInputService")
-local StarterGui = game:GetService("StarterGui")
-local Camera = workspace.CurrentCamera
-local Workspace = workspace
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local VirtualUser = game:GetService("VirtualUser")
-local TeleportService = game:GetService("TeleportService")
-local Lighting = game:GetService("Lighting")
+local Players             = game:GetService("Players")
+local LocalPlayer         = Players.LocalPlayer
+local RunService          = game:GetService("RunService")
+local UserInputService    = game:GetService("UserInputService")
+local StarterGui          = game:GetService("StarterGui")
+local ReplicatedStorage   = game:GetService("ReplicatedStorage")
+local VirtualUser         = game:GetService("VirtualUser")
+local VirtualInputManager = game:GetService("VirtualInputManager")
+local TeleportService     = game:GetService("TeleportService")
+local Lighting            = game:GetService("Lighting")
+local Stats               = game:GetService("Stats")
+local Workspace           = workspace
+
+-- 注意: 追踪线用 ScreenGui + Frame 实现, 不依赖 Drawing,
+-- 所以下面这个只用来在加载时提示环境能力, 不影响功能。
+local hasDrawing = (type(Drawing) == "table" and type(Drawing.new) == "function")
 
 -- ══════════════════════════════════════════════════════════════════
 -- 3. 预设颜色 & SETTINGS
@@ -86,1340 +161,1474 @@ local PRESET_COLORS = {
 }
 
 local THEME_PRESETS = {
-    ["Pink"]     = Color3.fromRGB(255, 80, 160),
-    ["Cyan"]     = Color3.fromRGB(0, 200, 255),
-    ["Purple"]   = Color3.fromRGB(180, 60, 255),
-    ["Green"]    = Color3.fromRGB(0, 255, 120),
-    ["Red"]      = Color3.fromRGB(255, 70, 90),
-    ["Gold"]     = Color3.fromRGB(255, 200, 50),
-    ["HotPink"]  = Color3.fromRGB(255, 105, 180),
+    ["Pink"]    = Color3.fromRGB(255, 80, 160),
+    ["Cyan"]    = Color3.fromRGB(0, 200, 255),
+    ["Purple"]  = Color3.fromRGB(180, 60, 255),
+    ["Green"]   = Color3.fromRGB(0, 255, 120),
+    ["Red"]     = Color3.fromRGB(255, 70, 90),
+    ["Gold"]    = Color3.fromRGB(255, 200, 50),
+    ["HotPink"] = Color3.fromRGB(255, 105, 180),
 }
 
 local SETTINGS = {
-    -- Combat
-    BB_AutoParry = false,
-    BB_AutoParryPrediction = 60,
-    BB_AutoDash = false,
-    BB_DashCooldownReduction = 0.5,
-    BB_AbilitySpam = false,
-    BB_KillAura = false,
-    BB_Reach = false,
-    BB_ReachStuds = 8,
+    -- 格挡
+    BB_AutoParry           = false,
+    BB_ParryDistance       = 14,
+    BB_PredictionThreshold = 0.12,
+    BB_DynamicThreshold    = true,
+    BB_CheckCooldown       = true,
+    BB_KeyFallback         = true,
+    BB_SpamParry           = false,
 
-    -- Visuals
-    BB_BallESP = false,
-    BB_BallESPColor = Color3.fromRGB(255, 80, 160),
-    BB_PlayerESP = false,
-    BB_PlayerESPColor = Color3.fromRGB(0, 200, 255),
-    BB_Tracer = false,
-    BB_NightMode = false,
-    BB_FullBright = false,
-    BB_HitboxVis = false,
+    -- 技能
+    BB_AutoAbility         = false,
+    BB_AbilityInterval     = 0.6,
+    BB_AbilityCheckCD      = true,
 
-    -- Movement
-    BB_WalkSpeed = 50,
-    BB_WalkSpeedEnabled = false,
-    BB_JumpPower = 100,
-    BB_JumpPowerEnabled = false,
-    BB_InfJump = false,
-    BB_Noclip = false,
-    BB_Fly = false,
-    BB_FlySpeed = 80,
+    -- 视觉
+    BB_BallESP             = false,
+    BB_BallESPColor        = Color3.fromRGB(255, 80, 160),
+    BB_BallTracer          = false,
+    BB_BallDistance        = true,
+    BB_TargetIndicator     = true,
+    BB_Trajectory          = false,
+    BB_PlayerESP           = false,
+    BB_PlayerESPColor      = Color3.fromRGB(0, 200, 255),
+    BB_PlayerTracer        = false,
+    BB_NightMode           = false,
+    BB_FullBright          = false,
+    BB_HitboxVis           = false,
 
-    -- Player
-    BB_AntiAFK = false,
+    -- 移动
+    BB_WalkSpeedEnabled    = false,
+    BB_WalkSpeed           = 50,
+    BB_JumpPowerEnabled    = false,
+    BB_JumpPower           = 100,
+    BB_InfJump             = false,
+    BB_Noclip              = false,
+    BB_Fly                 = false,
+    BB_FlySpeed            = 80,
 
-    -- Keybinds
-    BB_UIKey = Enum.KeyCode.RightShift,
-    BB_AutoParryKey = Enum.KeyCode.P,
-    BB_NoclipKey = Enum.KeyCode.V,
+    -- 杂项
+    BB_AntiAFK             = false,
+    BB_AutoGG              = false,
 }
 
 -- ══════════════════════════════════════════════════════════════════
--- 4. 全局变量
+-- 4. RUNTIME HANDLES
 -- ══════════════════════════════════════════════════════════════════
 local Window = nil
 local isDestroyed = false
 
-local espObjects = {}
-local ballEspObjects = {}
-local tracerLines = {}
-local hitboxParts = {}
+local mainConn, noclipConn, infJumpConn, flyConn, idledConn, charAddedConn
+local flyBV, flyBG
+local espFolder, tracerGui, tracerPool
+-- 必须在这里就初始化成空表: pairs(nil) 会直接报错,
+-- 而 clearESP() 只在关闭功能时才会把它们置空表。
+local ballEspObjects, hitboxBoxes = {}, {}
+local trajPart = nil
+local savedLighting = {}
 
-local mainLoopConn = nil
-local noclipConn = nil
-local infJumpConn = nil
-local flyConn = nil
-local flyBV = nil
-local flyBG = nil
-local antiAFKConn = nil
-local nightModeCache = {}
+local ballsFolder = nil
+local parryRemote, abilityRemote = nil, nil
 
-local lastParryTime = 0
-local lastAbilityTime = 0
-local lastDashTime = 0
-local lastKillAuraTime = 0
-
+local lastParry, lastAbility = 0, 0
+local parryCount = 0
 local selectedPlayer = nil
-local playerDropdownItems = {}
+local ggDebounce = false
 
 -- ══════════════════════════════════════════════════════════════════
--- 5. 通知辅助函数
+-- 5. 基础工具
 -- ══════════════════════════════════════════════════════════════════
 local function notify(title, content, duration, ntype)
     if Window then
-        Window:Notify({
-            Title    = title,
-            Content  = content,
-            Duration = duration or 3,
-            Type     = ntype or "Info"
-        })
-    else
-        pcall(function()
-            StarterGui:SetCore("SendNotification", {
-                Title = title,
-                Text = content,
-                Duration = duration or 3
+        local ok = pcall(function()
+            Window:Notify({
+                Title = title, Content = content,
+                Duration = duration or 3, Type = ntype or "Info",
             })
         end)
+        if ok then return end
     end
+    pcall(function()
+        StarterGui:SetCore("SendNotification", {
+            Title = title, Text = content, Duration = duration or 3,
+        })
+    end)
 end
 
--- ══════════════════════════════════════════════════════════════════
--- 6. 工具函数
--- ══════════════════════════════════════════════════════════════════
 local function getChar()
-    return LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+    local c = LocalPlayer.Character
+    if c then return c end
+    local ok, res = pcall(function()
+        return LocalPlayer.CharacterAdded:Wait()
+    end)
+    return ok and res or nil
 end
 
 local function getHum()
-    local char = getChar()
-    return char and char:FindFirstChildOfClass("Humanoid")
+    local c = LocalPlayer.Character
+    return c and c:FindFirstChildOfClass("Humanoid")
 end
 
 local function getRoot()
-    local char = getChar()
-    return char and char:FindFirstChild("HumanoidRootPart")
+    local c = LocalPlayer.Character
+    if not c then return nil end
+    return c:FindFirstChild("HumanoidRootPart") or c.PrimaryPart
 end
 
-local function findParryRemotes()
-    local remotes = {}
-    pcall(function()
-        for _, v in pairs(ReplicatedStorage:GetDescendants()) do
-            if v:IsA("RemoteEvent") then
-                local nameLower = v.Name:lower()
-                if nameLower:find("parry") or nameLower:find("swing") or nameLower:find("sword") or nameLower:find("ball") or nameLower:find("hit") or nameLower:find("attack") then
-                    table.insert(remotes, v)
-                end
-            end
-        end
-    end)
-    return remotes
-end
-
-local function findAttackRemotes()
-    local remotes = {}
-    pcall(function()
-        for _, v in pairs(ReplicatedStorage:GetDescendants()) do
-            if v:IsA("RemoteEvent") then
-                local nameLower = v.Name:lower()
-                if nameLower:find("hit") or nameLower:find("attack") or nameLower:find("sword") or nameLower:find("swing") or nameLower:find("damage") then
-                    table.insert(remotes, v)
-                end
-            end
-        end
-    end)
-    return remotes
-end
-
-local function findAbilityRemotes()
-    local remotes = {}
-    pcall(function()
-        for _, v in pairs(ReplicatedStorage:GetDescendants()) do
-            if v:IsA("RemoteEvent") then
-                local nameLower = v.Name:lower()
-                if nameLower:find("ability") or nameLower:find("skill") or nameLower:find("dash") or nameLower:find("action") or nameLower:find("use") then
-                    table.insert(remotes, v)
-                end
-            end
-        end
-    end)
-    return remotes
-end
-
-local function getBalls()
-    local balls = {}
-    pcall(function()
-        for _, v in pairs(Workspace:GetDescendants()) do
-            if v:IsA("BasePart") then
-                local nameLower = v.Name:lower()
-                if nameLower == "ball" then
-                    table.insert(balls, v)
-                elseif v:FindFirstChild("Forces") or v:FindFirstChild("Velocity") or v:FindFirstChildOfClass("BodyVelocity") or v:FindFirstChildOfClass("LinearVelocity") then
-                    if v:IsA("BasePart") and v.Shape ~= Enum.PartType.Block then
-                        table.insert(balls, v)
-                    end
-                end
-            elseif v:IsA("Model") and v.Name:lower():find("ball") then
-                local primary = v.PrimaryPart or v:FindFirstChildWhichIsA("BasePart")
-                if primary then table.insert(balls, primary) end
-            end
-        end
-    end)
-    return balls
-end
-
-local function getClosestBall()
-    local localRoot = getRoot()
-    if not localRoot then return nil, math.huge end
-    local closestBall = nil
-    local closestDist = math.huge
-    local localPos = localRoot.Position
-    for _, ball in ipairs(getBalls()) do
-        local dist = (ball.Position - localPos).Magnitude
-        if dist < closestDist then
-            closestDist = dist
-            closestBall = ball
-        end
-    end
-    return closestBall, closestDist
+local function getGuiParent()
+    local ok, res = pcall(function() return CoreGui end)
+    if ok and res then return res end
+    return LocalPlayer:WaitForChild("PlayerGui")
 end
 
 -- ══════════════════════════════════════════════════════════════════
--- 7. Combat: AutoParry / AutoDash / AbilitySpam / KillAura / Reach
+-- 6. 远程获取 (v2.0 精确路径, 不再暴力匹配)
 -- ══════════════════════════════════════════════════════════════════
-local parryRemotes = nil
-local attackRemotes = nil
-local abilityRemotes = nil
-
-local function ensureRemotes()
-    if not parryRemotes then parryRemotes = findParryRemotes() end
-    if not attackRemotes then attackRemotes = findAttackRemotes() end
-    if not abilityRemotes then abilityRemotes = findAbilityRemotes() end
+local function getRemotesFolder()
+    return ReplicatedStorage:FindFirstChild("Remotes") or ReplicatedStorage
 end
 
-local function fireParry()
-    ensureRemotes()
-    local now = tick()
-    local predictionSec = SETTINGS.BB_AutoParryPrediction / 1000
-    if now - lastParryTime < 0.1 then return end
-    lastParryTime = now
-    pcall(function()
-        for _, remote in ipairs(parryRemotes) do
-            pcall(function()
-                remote:FireServer()
-            end)
-        end
-    end)
-end
-
-local function fireAbility()
-    ensureRemotes()
-    local now = tick()
-    if now - lastAbilityTime < 0.3 then return end
-    lastAbilityTime = now
-    pcall(function()
-        for _, remote in ipairs(abilityRemotes) do
-            pcall(function()
-                remote:FireServer()
-            end)
-        end
-    end)
-end
-
-local function fireDash()
-    ensureRemotes()
-    local now = tick()
-    local cooldown = 1 - SETTINGS.BB_DashCooldownReduction
-    cooldown = math.max(0.1, cooldown)
-    if now - lastDashTime < cooldown then return end
-    lastDashTime = now
-    pcall(function()
-        for _, remote in ipairs(abilityRemotes) do
-            local nameLower = remote.Name:lower()
-            if nameLower:find("dash") then
-                pcall(function() remote:FireServer() end)
-            end
-        end
-    end)
-end
-
-local function fireAttack(targetPlayer)
-    ensureRemotes()
-    pcall(function()
-        for _, remote in ipairs(attackRemotes) do
-            pcall(function()
-                if targetPlayer then
-                    remote:FireServer(targetPlayer)
-                else
-                    remote:FireServer()
-                end
-            end)
-        end
-    end)
-end
-
-local function updateCombat()
-    if isDestroyed then return end
-    local localRoot = getRoot()
-    if not localRoot then return end
-
-    if SETTINGS.BB_AutoParry then
-        local ball, dist = getClosestBall()
-        if ball then
-            local threshold = 12
-            local velocity = ball.Velocity or Vector3.zero
-            local speed = velocity.Magnitude
-            local predictionSec = SETTINGS.BB_AutoParryPrediction / 1000
-            local predictedDist = dist - speed * predictionSec
-            if predictedDist < threshold or dist < threshold then
-                fireParry()
-            end
+local function pickRemote(names)
+    local folder = getRemotesFolder()
+    if not folder then return nil end
+    for _, n in ipairs(names) do
+        local r = folder:FindFirstChild(n)
+        if r and (r:IsA("RemoteEvent") or r:IsA("BindableEvent")) then
+            return r
         end
     end
+    return nil
+end
 
-    if SETTINGS.BB_AutoDash then
-        local ball, dist = getClosestBall()
-        if ball and dist < 15 then
-            fireDash()
-        end
-    end
+local function refreshRemotes()
+    parryRemote = pickRemote({ "ParryButtonPress", "ParryPress", "Parry" })
+    abilityRemote = pickRemote({ "AbilityButtonPress", "AbilityPress", "Ability" })
+end
+refreshRemotes()
 
-    if SETTINGS.BB_AbilitySpam then
-        fireAbility()
-    end
+print(string.format("[BladeBall] 远程: Parry=%s Ability=%s",
+    parryRemote and parryRemote.Name or "未找到",
+    abilityRemote and abilityRemote.Name or "未找到"))
 
-    if SETTINGS.BB_KillAura then
-        local now = tick()
-        if now - lastKillAuraTime < 0.15 then return end
-        lastKillAuraTime = now
-        local localPos = localRoot.Position
-        local reachDist = SETTINGS.BB_Reach and SETTINGS.BB_ReachStuds or 6
-        for _, player in pairs(Players:GetPlayers()) do
-            if player == LocalPlayer then continue end
-            local char = player.Character
-            if not char then continue end
-            local hum = char:FindFirstChildOfClass("Humanoid")
-            if not hum or hum.Health <= 0 then continue end
-            local root = char:FindFirstChild("HumanoidRootPart")
-            if not root then continue end
-            local dist = (root.Position - localPos).Magnitude
-            if dist <= reachDist then
-                fireAttack(player)
-            end
-        end
-    end
+-- ══════════════════════════════════════════════════════════════════
+-- 7. 冷却读取 (游戏在 Hotbar 的 UIGradient 上暴露冷却)
+-- ══════════════════════════════════════════════════════════════════
+local function readGradientOffset(slotName, borderName)
+    local pg = LocalPlayer:FindFirstChild("PlayerGui")
+    local hotbar = pg and pg:FindFirstChild("Hotbar")
+    local slot = hotbar and hotbar:FindFirstChild(slotName)
+    local border = slot and slot:FindFirstChild(borderName)
+    local grad = border and border:FindFirstChildOfClass("UIGradient")
+    if not grad then return nil end
+    local ok, y = pcall(function() return grad.Offset.Y end)
+    if ok and type(y) == "number" then return y end
+    return nil
+end
+
+-- 返回 true 表示冷却中
+local function parryOnCooldown()
+    local y = readGradientOffset("Block", "border1")
+    if y == nil then return false end
+    return y < 0.5
+end
+
+local function abilityOnCooldown()
+    local y = readGradientOffset("Ability", "border2")
+    if y == nil then return false end
+    return y < 0.5
 end
 
 -- ══════════════════════════════════════════════════════════════════
--- 8. Movement: WalkSpeed / JumpPower / InfJump / Noclip / Fly
+-- 8. 球的查找 (v2.0: 只看 workspace.Balls, 用 realBall 属性判定)
 -- ══════════════════════════════════════════════════════════════════
-local function updateMovement()
-    if isDestroyed then return end
-    local hum = getHum()
-    if not hum then return end
+local function getBallsFolder()
+    if ballsFolder and ballsFolder.Parent then return ballsFolder end
+    ballsFolder = Workspace:FindFirstChild("Balls") or Workspace:FindFirstChild("Ball")
+    return ballsFolder
+end
 
-    if SETTINGS.BB_WalkSpeedEnabled then
-        if hum.WalkSpeed ~= SETTINGS.BB_WalkSpeed then
-            hum.WalkSpeed = SETTINGS.BB_WalkSpeed
+local function attr(inst, name)
+    local ok, v = pcall(function() return inst:GetAttribute(name) end)
+    if ok then return v end
+    return nil
+end
+
+local function isValidBall(b)
+    if not b or not b.Parent then return false end
+    if not b:IsA("BasePart") then return false end
+    if attr(b, "realBall") == true then return true end
+    if attr(b, "target") ~= nil then return true end
+    return false
+end
+
+local function getValidBalls()
+    local out = {}
+    local folder = getBallsFolder()
+    if not folder then return out end
+    for _, b in ipairs(folder:GetChildren()) do
+        if isValidBall(b) then out[#out + 1] = b end
+    end
+    return out
+end
+
+local function findBestBall()
+    local root = getRoot()
+    if not root then return nil, math.huge end
+    local myPos = root.Position
+    local best, bestDist = nil, math.huge
+    for _, b in ipairs(getValidBalls()) do
+        local d = (b.Position - myPos).Magnitude
+        if d < bestDist then
+            bestDist = d
+            best = b
         end
     end
+    return best, bestDist
+end
 
-    if SETTINGS.BB_JumpPowerEnabled then
-        if hum.JumpPower ~= SETTINGS.BB_JumpPower then
-            hum.JumpPower = SETTINGS.BB_JumpPower
+-- 这颗球是不是在瞄我
+local function isBallTargetingMe(ball)
+    if not ball then return false end
+    local tgt = attr(ball, "target")
+    if tgt ~= nil then
+        if typeof(tgt) == "Instance" then
+            if tgt == LocalPlayer or tgt == LocalPlayer.Character then return true end
+        elseif type(tgt) == "string" then
+            if tgt == LocalPlayer.Name or tgt == LocalPlayer.DisplayName then return true end
         end
     end
+    -- 回退: 公开源码用 "Really red" 表示正在瞄你
+    local ok, bc = pcall(function() return ball.BrickColor end)
+    if ok and bc and tostring(bc) == "Really red" then return true end
+    return false
 end
 
-local function enableInfJump()
-    if infJumpConn then infJumpConn:Disconnect(); infJumpConn = nil end
-    infJumpConn = UserInputService.JumpRequest:Connect(function()
-        if not SETTINGS.BB_InfJump then
-            infJumpConn:Disconnect()
-            infJumpConn = nil
-            return
-        end
-        local hum = getHum()
-        if hum then
-            hum:ChangeState(Enum.HumanoidStateType.Jumping)
-        end
+-- ══════════════════════════════════════════════════════════════════
+-- 9. 格挡 / 技能触发
+-- ══════════════════════════════════════════════════════════════════
+local function pressKeyFallback(keyCode)
+    pcall(function()
+        VirtualInputManager:SendKeyEvent(true, keyCode, false, game)
     end)
-end
-
-local function enableNoclip()
-    if noclipConn then noclipConn:Disconnect(); noclipConn = nil end
-    noclipConn = RunService.Stepped:Connect(function()
-        if not SETTINGS.BB_Noclip then
-            noclipConn:Disconnect()
-            noclipConn = nil
-            local char = LocalPlayer.Character
-            if char then
-                for _, part in ipairs(char:GetDescendants()) do
-                    if part:IsA("BasePart") then
-                        part.CanCollide = true
-                    end
-                end
-            end
-            return
-        end
-        local char = LocalPlayer.Character
-        if char then
-            for _, part in ipairs(char:GetDescendants()) do
-                if part:IsA("BasePart") and part.CanCollide then
-                    part.CanCollide = false
-                end
-            end
-        end
-    end)
-end
-
-local function enableFly()
-    if flyConn then flyConn:Disconnect(); flyConn = nil end
-    if flyBV then flyBV:Destroy(); flyBV = nil end
-    if flyBG then flyBG:Destroy(); flyBG = nil end
-
-    task.spawn(function()
-        local root = getRoot()
-        local hum = getHum()
-        if not root or not hum then return end
-        hum.PlatformStand = true
-        flyBV = Instance.new("BodyVelocity")
-        flyBV.MaxForce = Vector3.new(9e9, 9e9, 9e9)
-        flyBV.Velocity = Vector3.zero
-        flyBV.Parent = root
-        flyBG = Instance.new("BodyGyro")
-        flyBG.MaxTorque = Vector3.new(9e9, 9e9, 9e9)
-        flyBG.P = 10000
-        flyBG.CFrame = root.CFrame
-        flyBG.Parent = root
-
-        flyConn = RunService.RenderStepped:Connect(function()
-            if not SETTINGS.BB_Fly then
-                flyConn:Disconnect()
-                flyConn = nil
-                local h = getHum()
-                if h then h.PlatformStand = false end
-                if flyBV then flyBV:Destroy(); flyBV = nil end
-                if flyBG then flyBG:Destroy(); flyBG = nil end
-                return
-            end
-            local r = getRoot()
-            local cam = workspace.CurrentCamera
-            if not r or not cam then return end
-            local dir = Vector3.zero
-            local cf = cam.CFrame
-            if UserInputService:IsKeyDown(Enum.KeyCode.W) then dir = dir + cf.LookVector end
-            if UserInputService:IsKeyDown(Enum.KeyCode.S) then dir = dir - cf.LookVector end
-            if UserInputService:IsKeyDown(Enum.KeyCode.A) then dir = dir - cf.RightVector end
-            if UserInputService:IsKeyDown(Enum.KeyCode.D) then dir = dir + cf.RightVector end
-            if UserInputService:IsKeyDown(Enum.KeyCode.Space) then dir = dir + Vector3.new(0, 1, 0) end
-            if UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) then dir = dir - Vector3.new(0, 1, 0) end
-            if flyBV then flyBV.Velocity = dir * SETTINGS.BB_FlySpeed end
-            if flyBG then flyBG.CFrame = cam.CFrame end
+    task.delay(0.01, function()
+        pcall(function()
+            VirtualInputManager:SendKeyEvent(false, keyCode, false, game)
         end)
     end)
 end
 
+local function fireParry()
+    local now = tick()
+    if now - lastParry < 0.03 then return false end
+    lastParry = now
+
+    if SETTINGS.BB_CheckCooldown and parryOnCooldown() then
+        return false
+    end
+
+    local ok = false
+    if parryRemote then
+        ok = pcall(function() parryRemote:FireServer() end)
+        if not ok then
+            -- 万一它是 BindableEvent
+            ok = pcall(function() parryRemote:Fire() end)
+        end
+    end
+    if SETTINGS.BB_KeyFallback then
+        pressKeyFallback(Enum.KeyCode.F)
+    end
+    parryCount = parryCount + 1
+    return ok
+end
+
+local function fireAbility()
+    local now = tick()
+    if now - lastAbility < (SETTINGS.BB_AbilityInterval or 0.6) then return false end
+    lastAbility = now
+
+    if SETTINGS.BB_AbilityCheckCD and abilityOnCooldown() then
+        return false
+    end
+
+    local ok = false
+    if abilityRemote then
+        ok = pcall(function() abilityRemote:FireServer() end)
+        if not ok then
+            ok = pcall(function() abilityRemote:Fire() end)
+        end
+    end
+    pressKeyFallback(Enum.KeyCode.Q)
+    return ok
+end
+
 -- ══════════════════════════════════════════════════════════════════
--- 9. Visuals: ESP / Tracer / NightMode / FullBright / Hitbox
+-- 10. 主战斗循环
 -- ══════════════════════════════════════════════════════════════════
-local function createPlayerESP(player)
-    if espObjects[player] then return end
-    local highlight = Instance.new("Highlight")
-    highlight.Name = "BB_PlayerHighlight"
-    highlight.FillColor = SETTINGS.BB_PlayerESPColor
-    highlight.OutlineColor = SETTINGS.BB_PlayerESPColor
-    highlight.FillTransparency = 0.5
-    highlight.OutlineTransparency = 0.3
-    highlight.Enabled = false
-    highlight.Parent = player.Character or player
+local function computeTimeToImpact(ball, charPos, charVel)
+    local ballPos = ball.Position
+    local dist = (ballPos - charPos).Magnitude
+    local parryDist = SETTINGS.BB_ParryDistance or 14
 
-    local nameText = Drawing.new("Text")
-    nameText.Visible = false
-    nameText.Color = Color3.new(1,1,1)
-    nameText.Size = 14
-    nameText.Center = true
-    nameText.Outline = true
-    nameText.OutlineColor = Color3.new(0,0,0)
+    if dist <= parryDist then return 0 end
 
-    local tracer = Drawing.new("Line")
-    tracer.Visible = false
-    tracer.Thickness = 1
-    tracer.Transparency = 0.7
-    tracer.Color = SETTINGS.BB_PlayerESPColor
+    local delta = charPos - ballPos
+    if delta.Magnitude < 0.01 then return math.huge end
+    local dirToPlayer = delta.Unit
 
-    espObjects[player] = {
-        Highlight = highlight,
-        NameText = nameText,
-        Tracer = tracer,
-        Player = player,
-    }
+    local ballVel = ball.Velocity
+    local speedToward = ballVel:Dot(dirToPlayer)
+    if charVel then speedToward = speedToward - charVel:Dot(dirToPlayer) end
 
-    player.CharacterAdded:Connect(function(newChar)
-        task.wait(0.1)
-        local obj = espObjects[player]
-        if obj and obj.Highlight then
-            obj.Highlight.Adornee = newChar
-            obj.Highlight.Parent = newChar
+    if speedToward <= 0 then return math.huge end
+    return (dist - parryDist) / speedToward
+end
+
+local function combatStep()
+    if isDestroyed then return end
+
+    local wantParry = SETTINGS.BB_AutoParry or SETTINGS.BB_SpamParry
+    local wantAbility = SETTINGS.BB_AutoAbility
+    if not (wantParry or wantAbility) then return end
+
+    local char = LocalPlayer.Character
+    local root = getRoot()
+    if not char or not root then return end
+
+    local charPos = root.Position
+    local charVel = root.Velocity
+
+    local ball = findBestBall()
+    if not ball then return end
+
+    if SETTINGS.BB_SpamParry then
+        -- 无视距离持续按, 配合冷却检查使用
+        fireParry()
+    elseif wantParry then
+        local dist = (ball.Position - charPos).Magnitude
+        local threshold = SETTINGS.BB_PredictionThreshold or 0.12
+
+        local tti = computeTimeToImpact(ball, charPos, charVel)
+
+        -- 动态阈值: 球越快, 留给反应的时间窗口越紧
+        if SETTINGS.BB_DynamicThreshold and tti < math.huge then
+            local speed = ball.Velocity.Magnitude
+            if speed > 60 then
+                threshold = math.max(0.05, threshold * (60 / speed))
+            end
+        end
+
+        local shouldParry = false
+        if dist <= (SETTINGS.BB_ParryDistance or 14) then
+            shouldParry = true
+        elseif tti < threshold then
+            shouldParry = true
+        end
+
+        if shouldParry then
+            fireParry()
+        end
+    end
+
+    if wantAbility and SETTINGS.BB_AutoAbility then
+        -- 只有球确实在瞄自己时才开技能, 避免无意义空放
+        if isBallTargetingMe(ball) then
+            local dist = (ball.Position - charPos).Magnitude
+            local tti = computeTimeToImpact(ball, charPos, charVel)
+            if dist <= (SETTINGS.BB_ParryDistance or 14) or tti < 0.25 then
+                fireAbility()
+            end
+        end
+    end
+end
+
+-- ══════════════════════════════════════════════════════════════════
+-- 11. 移动
+-- ══════════════════════════════════════════════════════════════════
+local function movementStep()
+    if isDestroyed then return end
+    local hum = getHum()
+    if not hum then return end
+    if SETTINGS.BB_WalkSpeedEnabled and hum.WalkSpeed ~= SETTINGS.BB_WalkSpeed then
+        pcall(function() hum.WalkSpeed = SETTINGS.BB_WalkSpeed end)
+    end
+    if SETTINGS.BB_JumpPowerEnabled then
+        pcall(function()
+            hum.UseJumpPower = true
+            hum.JumpPower = SETTINGS.BB_JumpPower
+        end)
+    end
+end
+
+local function toggleNoclip(enabled)
+    if noclipConn then noclipConn:Disconnect() noclipConn = nil end
+    if not enabled then
+        local char = LocalPlayer.Character
+        if char then
+            for _, part in ipairs(char:GetDescendants()) do
+                if part:IsA("BasePart") then
+                    pcall(function() part.CanCollide = true end)
+                end
+            end
+        end
+        return
+    end
+    noclipConn = RunService.Stepped:Connect(function()
+        if isDestroyed then return end
+        local char = LocalPlayer.Character
+        if not char then return end
+        for _, part in ipairs(char:GetDescendants()) do
+            if part:IsA("BasePart") then
+                pcall(function() part.CanCollide = false end)
+            end
         end
     end)
 end
 
-local function createBallESP(ball)
-    if ballEspObjects[ball] then return end
-    local highlight = Instance.new("Highlight")
-    highlight.Name = "BB_BallHighlight"
-    highlight.FillColor = SETTINGS.BB_BallESPColor
-    highlight.OutlineColor = SETTINGS.BB_BallESPColor
-    highlight.FillTransparency = 0.3
-    highlight.OutlineTransparency = 0.1
-    highlight.Enabled = false
-    highlight.Adornee = ball
-    highlight.Parent = ball
-
-    local tracer = Drawing.new("Line")
-    tracer.Visible = false
-    tracer.Thickness = 1
-    tracer.Transparency = 0.8
-    tracer.Color = SETTINGS.BB_BallESPColor
-
-    ballEspObjects[ball] = {
-        Highlight = highlight,
-        Tracer = tracer,
-        Ball = ball,
-    }
+local function toggleInfJump(enabled)
+    if infJumpConn then infJumpConn:Disconnect() infJumpConn = nil end
+    if not enabled then return end
+    infJumpConn = UserInputService.JumpRequest:Connect(function()
+        if isDestroyed then return end
+        local hum = getHum()
+        if hum then
+            pcall(function() hum:ChangeState(Enum.HumanoidStateType.Jumping) end)
+        end
+    end)
 end
 
-local function clearHitboxes()
-    for _, part in pairs(hitboxParts) do
-        pcall(function() part:Destroy() end)
+local function toggleFly(enabled, speed)
+    if flyConn then flyConn:Disconnect() flyConn = nil end
+    if flyBV then pcall(function() flyBV:Destroy() end) flyBV = nil end
+    if flyBG then pcall(function() flyBG:Destroy() end) flyBG = nil end
+
+    local hum = getHum()
+    if not enabled then
+        if hum then pcall(function() hum.PlatformStand = false end) end
+        return
     end
-    hitboxParts = {}
+
+    local root = getRoot()
+    if not root then return end
+    if hum then pcall(function() hum.PlatformStand = true end) end
+
+    flyBV = Instance.new("BodyVelocity")
+    flyBV.Name = "BB_FlyBV"
+    flyBV.MaxForce = Vector3.new(9e9, 9e9, 9e9)
+    flyBV.Velocity = Vector3.zero
+    flyBV.Parent = root
+
+    flyBG = Instance.new("BodyGyro")
+    flyBG.Name = "BB_FlyBG"
+    flyBG.MaxTorque = Vector3.new(9e9, 9e9, 9e9)
+    flyBG.P = 10000
+    flyBG.CFrame = root.CFrame
+    flyBG.Parent = root
+
+    flyConn = RunService.RenderStepped:Connect(function()
+        if isDestroyed or not flyBV or not flyBV.Parent then return end
+        local cam = Workspace.CurrentCamera
+        local r = getRoot()
+        if not cam or not r then return end
+        local dir = Vector3.zero
+        local cf = cam.CFrame
+        if UserInputService:IsKeyDown(Enum.KeyCode.W) then dir = dir + cf.LookVector end
+        if UserInputService:IsKeyDown(Enum.KeyCode.S) then dir = dir - cf.LookVector end
+        if UserInputService:IsKeyDown(Enum.KeyCode.A) then dir = dir - cf.RightVector end
+        if UserInputService:IsKeyDown(Enum.KeyCode.D) then dir = dir + cf.RightVector end
+        if UserInputService:IsKeyDown(Enum.KeyCode.Space) then dir = dir + Vector3.new(0, 1, 0) end
+        if UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) then dir = dir - Vector3.new(0, 1, 0) end
+        flyBV.Velocity = dir * (speed or SETTINGS.BB_FlySpeed or 80)
+        flyBG.CFrame = cam.CFrame
+    end)
+end
+
+-- ══════════════════════════════════════════════════════════════════
+-- 12. ESP / 视觉
+-- ══════════════════════════════════════════════════════════════════
+local function clearESP()
+    if espFolder then
+        pcall(function() espFolder:Destroy() end)
+        espFolder = nil
+    end
+    ballEspObjects = {}
+    hitboxBoxes = {}
+end
+
+local function ensureEspFolder()
+    if espFolder and espFolder.Parent then return espFolder end
+    espFolder = Instance.new("Folder")
+    espFolder.Name = "BB_ESP_Folder"
+    espFolder.Parent = getGuiParent()
+    return espFolder
+end
+
+local function clearMarks(obj)
+    pcall(function()
+        for _, c in ipairs(obj:GetChildren()) do
+            if c.Name == "BB_ESP_HL" or c.Name == "BB_ESP_BB" then
+                c:Destroy()
+            end
+        end
+    end)
+end
+
+local function makeHighlight(parent, color, name)
+    local hl = Instance.new("Highlight")
+    hl.Name = name or "BB_ESP_HL"
+    hl.FillColor = color
+    hl.OutlineColor = color
+    hl.FillTransparency = 0.5
+    hl.OutlineTransparency = 0.2
+    hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+    hl.Parent = parent
+    return hl
+end
+
+local function makeLabel(parent, text, color, yOffset)
+    local bb = Instance.new("BillboardGui")
+    bb.Name = "BB_ESP_BB"
+    bb.Size = UDim2.new(0, 220, 0, 26)
+    bb.StudsOffset = Vector3.new(0, yOffset or 3, 0)
+    bb.AlwaysOnTop = true
+    local tl = Instance.new("TextLabel")
+    tl.Size = UDim2.new(1, 0, 1, 0)
+    tl.BackgroundTransparency = 1
+    tl.Text = text
+    tl.TextColor3 = color
+    tl.TextStrokeTransparency = 0.3
+    tl.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
+    tl.Font = Enum.Font.GothamBold
+    tl.TextSize = 14
+    tl.Parent = bb
+    bb.Parent = parent
+    return bb
+end
+
+-- Tracer 用 ScreenGui + Frame 画线, 不依赖 Drawing
+local function getTracerGui()
+    if tracerGui and tracerGui.Parent then return tracerGui end
+    tracerGui = Instance.new("ScreenGui")
+    tracerGui.Name = "BB_TracerGui"
+    tracerGui.IgnoreGuiInset = true
+    tracerGui.ResetOnSpawn = false
+    tracerGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+    tracerGui.Parent = getGuiParent()
+    tracerPool = {}
+    return tracerGui
+end
+
+local function clearTracers()
+    if tracerGui then
+        pcall(function() tracerGui:Destroy() end)
+        tracerGui = nil
+    end
+    tracerPool = nil
+end
+
+local function tracerTargets()
+    local out = {}
+    if SETTINGS.BB_BallESP and SETTINGS.BB_BallTracer then
+        for _, b in ipairs(getValidBalls()) do
+            out[#out + 1] = { pos = b.Position, color = SETTINGS.BB_BallESPColor }
+        end
+    end
+    if SETTINGS.BB_PlayerESP and SETTINGS.BB_PlayerTracer then
+        for _, p in ipairs(Players:GetPlayers()) do
+            if p ~= LocalPlayer and p.Character then
+                local r = p.Character:FindFirstChild("HumanoidRootPart")
+                if r then
+                    out[#out + 1] = { pos = r.Position, color = SETTINGS.BB_PlayerESPColor }
+                end
+            end
+        end
+    end
+    return out
+end
+
+local function tracerStep()
+    if isDestroyed then return end
+    if not (SETTINGS.BB_BallTracer or SETTINGS.BB_PlayerTracer) then return end
+    local cam = Workspace.CurrentCamera
+    if not cam then return end
+    local gui = getTracerGui()
+    if not gui then return end
+    tracerPool = tracerPool or {}
+
+    local origin = Vector2.new(cam.ViewportSize.X / 2, cam.ViewportSize.Y)
+    local targets = tracerTargets()
+    local used = {}
+
+    for i, t in ipairs(targets) do
+        local sp, onScreen = cam:WorldToViewportPoint(t.pos)
+        if onScreen and sp.Z > 0 then
+            local frame = tracerPool[i]
+            if not frame or not frame.Parent then
+                frame = Instance.new("Frame")
+                frame.Name = "BB_Tracer"
+                frame.BorderSizePixel = 0
+                frame.AnchorPoint = Vector2.new(0, 0.5)
+                frame.ZIndex = 2
+                frame.Parent = gui
+                tracerPool[i] = frame
+            end
+            frame.BackgroundColor3 = t.color
+            local delta = Vector2.new(sp.X, sp.Y) - origin
+            frame.Size = UDim2.fromOffset(math.max(delta.Magnitude, 1), 1)
+            frame.Position = UDim2.fromOffset(origin.X, origin.Y)
+            frame.Rotation = math.deg(math.atan2(delta.Y, delta.X))
+            frame.Visible = true
+            used[i] = true
+        end
+    end
+
+    for k, frame in pairs(tracerPool) do
+        if not used[k] and frame and frame.Parent then
+            pcall(function() frame:Destroy() end)
+            tracerPool[k] = nil
+        end
+    end
+end
+
+local function updateBallVisuals()
+    ensureEspFolder()
+
+    local root = getRoot()
+    local myPos = root and root.Position
+
+    -- 球 ESP
+    local seen = {}
+    for _, ball in ipairs(getValidBalls()) do
+        seen[ball] = true
+        clearMarks(ball)
+        local targeting = isBallTargetingMe(ball)
+        local color = SETTINGS.BB_BallESPColor
+        if SETTINGS.BB_TargetIndicator and targeting then
+            color = Color3.fromRGB(255, 40, 40)
+        end
+
+        if SETTINGS.BB_BallESP then
+            pcall(function() makeHighlight(ball, color, "BB_ESP_HL") end)
+        end
+
+        if SETTINGS.BB_BallESP and (SETTINGS.BB_BallDistance or SETTINGS.BB_TargetIndicator) then
+            local txt = "Ball"
+            if SETTINGS.BB_BallDistance and myPos then
+                txt = txt .. string.format("  [%dm]", math.floor((ball.Position - myPos).Magnitude))
+            end
+            if SETTINGS.BB_TargetIndicator and targeting then
+                txt = txt .. "  ← 瞄你"
+            end
+            pcall(function() makeLabel(ball, txt, color, 3) end)
+        end
+    end
+
+    -- 清理已消失的球
+    for ball in pairs(ballEspObjects) do
+        if not seen[ball] then ballEspObjects[ball] = nil end
+    end
+
+    -- 轨迹预测点
+    if SETTINGS.BB_Trajectory then
+        local ball = findBestBall()
+        if ball and root then
+            local tti = computeTimeToImpact(ball, root.Position, root.Velocity)
+            if tti < math.huge and tti >= 0 then
+                local predicted = ball.Position + ball.Velocity * tti
+                if not trajPart or not trajPart.Parent then
+                    trajPart = Instance.new("Part")
+                    trajPart.Name = "BB_TrajMarker"
+                    trajPart.Shape = Enum.PartType.Ball
+                    trajPart.Size = Vector3.new(2, 2, 2)
+                    trajPart.Anchored = true
+                    trajPart.CanCollide = false
+                    trajPart.CanQuery = false
+                    trajPart.Material = Enum.Material.Neon
+                    trajPart.Parent = Workspace
+                end
+                trajPart.Color = SETTINGS.BB_BallESPColor
+                trajPart.Position = predicted
+                trajPart.Transparency = 0.35
+            else
+                if trajPart then pcall(function() trajPart:Destroy() end) trajPart = nil end
+            end
+        else
+            if trajPart then pcall(function() trajPart:Destroy() end) trajPart = nil end
+        end
+    else
+        if trajPart then pcall(function() trajPart:Destroy() end) trajPart = nil end
+    end
+
+    -- 玩家 ESP
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p ~= LocalPlayer and p.Character then
+            local char = p.Character
+            local hum = char:FindFirstChildOfClass("Humanoid")
+            local alive = hum ~= nil and hum.Health > 0
+            if SETTINGS.BB_PlayerESP and alive then
+                clearMarks(char)
+                pcall(function() makeHighlight(char, SETTINGS.BB_PlayerESPColor, "BB_ESP_HL") end)
+                pcall(function() makeLabel(char, p.Name, SETTINGS.BB_PlayerESPColor, 4) end)
+            else
+                clearMarks(char)
+            end
+        end
+    end
 end
 
 local function updateHitboxes()
     if not SETTINGS.BB_HitboxVis then
-        clearHitboxes()
+        for _, box in pairs(hitboxBoxes) do
+            pcall(function() box:Destroy() end)
+        end
+        hitboxBoxes = {}
         return
     end
-    for _, player in pairs(Players:GetPlayers()) do
-        if player == LocalPlayer then continue end
-        local char = player.Character
-        if not char then continue end
-        local hum = char:FindFirstChildOfClass("Humanoid")
-        if not hum or hum.Health <= 0 then continue end
-        for _, part in ipairs(char:GetDescendants()) do
-            if part:IsA("BasePart") and not hitboxParts[part] then
-                local box = Instance.new("SelectionBox")
-                box.Name = "BB_HitboxVis"
-                box.Adornee = part
-                box.LineThickness = 0.05
-                box.Color3 = SETTINGS.BB_PlayerESPColor
-                box.Transparency = 0.5
-                box.Parent = CoreGui
-                hitboxParts[part] = box
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p ~= LocalPlayer and p.Character then
+            local hum = p.Character:FindFirstChildOfClass("Humanoid")
+            if hum and hum.Health > 0 then
+                for _, part in ipairs(p.Character:GetDescendants()) do
+                    if part:IsA("BasePart") and not hitboxBoxes[part] then
+                        local box = Instance.new("SelectionBox")
+                        box.Name = "BB_Hitbox"
+                        box.Adornee = part
+                        box.LineThickness = 0.05
+                        box.Color3 = SETTINGS.BB_PlayerESPColor
+                        box.Transparency = 0.5
+                        box.Parent = CoreGui
+                        hitboxBoxes[part] = box
+                    end
+                end
             end
         end
     end
-    for part, box in pairs(hitboxParts) do
+    for part, box in pairs(hitboxBoxes) do
         if not part or not part.Parent then
             pcall(function() box:Destroy() end)
-            hitboxParts[part] = nil
+            hitboxBoxes[part] = nil
         end
     end
 end
 
-local function enableNightMode()
-    for _, v in pairs(Lighting:GetChildren()) do
-        if v:IsA("Atmosphere") or v:IsA("Sky") or v:IsA("Clouds") then
-            nightModeCache[v] = true
+-- ══════════════════════════════════════════════════════════════════
+-- 13. 世界 / 服务器 / 杂项
+-- ══════════════════════════════════════════════════════════════════
+local function toggleFullbright(enabled)
+    if enabled then
+        if not savedLighting.saved then
+            savedLighting.brightness = Lighting.Brightness
+            savedLighting.ambient = Lighting.Ambient
+            savedLighting.outdoor = Lighting.OutdoorAmbient
+            savedLighting.fogEnd = Lighting.FogEnd
+            savedLighting.saved = true
         end
-    end
-    Lighting.ClockTime = 0
-    Lighting.FogEnd = 1000
-    Lighting.Ambient = Color3.fromRGB(20, 20, 40)
-    Lighting.OutdoorAmbient = Color3.fromRGB(10, 10, 25)
-    for v in pairs(nightModeCache) do
-        pcall(function() v.Enabled = false end)
-    end
-end
-
-local function disableNightMode()
-    Lighting.ClockTime = 14
-    Lighting.FogEnd = 100000
-    Lighting.Ambient = Color3.fromRGB(128, 128, 128)
-    Lighting.OutdoorAmbient = Color3.fromRGB(128, 128, 128)
-    for v in pairs(nightModeCache) do
-        pcall(function() v.Enabled = true end)
-    end
-    nightModeCache = {}
-end
-
-local origBrightness = nil
-local origAmbient = nil
-local origOutdoorAmbient = nil
-
-local function enableFullBright()
-    if not origBrightness then
-        origBrightness = Lighting.Brightness
-        origAmbient = Lighting.Ambient
-        origOutdoorAmbient = Lighting.OutdoorAmbient
-    end
-    Lighting.Brightness = 3
-    Lighting.Ambient = Color3.fromRGB(200, 200, 200)
-    Lighting.OutdoorAmbient = Color3.fromRGB(200, 200, 200)
-end
-
-local function disableFullBright()
-    if origBrightness then
-        Lighting.Brightness = origBrightness
-        Lighting.Ambient = origAmbient
-        Lighting.OutdoorAmbient = origOutdoorAmbient
+        pcall(function()
+            Lighting.Brightness = 3
+            Lighting.Ambient = Color3.fromRGB(200, 200, 200)
+            Lighting.OutdoorAmbient = Color3.fromRGB(200, 200, 200)
+            Lighting.FogEnd = 100000
+        end)
+    else
+        if not savedLighting.saved then return end
+        pcall(function()
+            Lighting.Brightness = savedLighting.brightness or 1
+            Lighting.Ambient = savedLighting.ambient or Color3.fromRGB(128, 128, 128)
+            Lighting.OutdoorAmbient = savedLighting.outdoor or Color3.fromRGB(128, 128, 128)
+            Lighting.FogEnd = savedLighting.fogEnd or 100000
+        end)
     end
 end
 
-local function updateVisuals()
-    if isDestroyed then return end
-    local localRoot = getRoot()
-    local viewportSize = Camera.ViewportSize
-    local screenBottom = Vector2.new(viewportSize.X / 2, viewportSize.Y)
-
-    for _, player in pairs(Players:GetPlayers()) do
-        if player == LocalPlayer then continue end
-        local obj = espObjects[player]
-        if not obj then
-            createPlayerESP(player)
-            obj = espObjects[player]
-        end
-        local char = player.Character
-        if not char then
-            if obj.Highlight then obj.Highlight.Enabled = false end
-            obj.NameText.Visible = false
-            obj.Tracer.Visible = false
-            continue
-        end
-        local root = char:FindFirstChild("HumanoidRootPart")
-        local head = char:FindFirstChild("Head")
-        if not root or not head then
-            if obj.Highlight then obj.Highlight.Enabled = false end
-            obj.NameText.Visible = false
-            obj.Tracer.Visible = false
-            continue
-        end
-        local hum = char:FindFirstChildOfClass("Humanoid")
-        local isDead = hum and hum.Health <= 0
-
-        if obj.Highlight then
-            obj.Highlight.Enabled = (SETTINGS.BB_PlayerESP and not isDead)
-            obj.Highlight.FillColor = SETTINGS.BB_PlayerESPColor
-            obj.Highlight.OutlineColor = SETTINGS.BB_PlayerESPColor
-        end
-
-        local headPos, headVis = Camera:WorldToViewportPoint(head.Position)
-        if SETTINGS.BB_PlayerESP and not isDead and headVis then
-            obj.NameText.Position = Vector2.new(headPos.X, headPos.Y - 25)
-            obj.NameText.Text = player.Name
-            obj.NameText.Color = Color3.new(1,1,1)
-            obj.NameText.Visible = true
-        else
-            obj.NameText.Visible = false
-        end
-
-        if SETTINGS.BB_Tracer and SETTINGS.BB_PlayerESP and not isDead and headVis then
-            local rootPos, rootVis = Camera:WorldToViewportPoint(root.Position)
-            if rootVis then
-                obj.Tracer.From = screenBottom
-                obj.Tracer.To = Vector2.new(rootPos.X, rootPos.Y)
-                obj.Tracer.Color = SETTINGS.BB_PlayerESPColor
-                obj.Tracer.Visible = true
-            else
-                obj.Tracer.Visible = false
+local nightCache = {}
+local function toggleNightMode(enabled)
+    if enabled then
+        nightCache = {}
+        for _, v in ipairs(Lighting:GetChildren()) do
+            if v:IsA("Atmosphere") or v:IsA("Sky") or v:IsA("Clouds") then
+                nightCache[v] = true
             end
-        else
-            obj.Tracer.Visible = false
         end
-    end
-
-    for player, obj in pairs(espObjects) do
-        if not Players:FindFirstChild(player.Name) then
-            if obj.Highlight then obj.Highlight:Destroy() end
-            obj.NameText:Remove()
-            obj.Tracer:Remove()
-            espObjects[player] = nil
+        if not savedLighting.nightSaved then
+            savedLighting.clockTime = Lighting.ClockTime
+            savedLighting.nightAmbient = Lighting.Ambient
+            savedLighting.nightOutdoor = Lighting.OutdoorAmbient
+            savedLighting.nightFog = Lighting.FogEnd
+            savedLighting.nightSaved = true
         end
-    end
-
-    local balls = getBalls()
-    local seenBalls = {}
-    for _, ball in ipairs(balls) do
-        seenBalls[ball] = true
-        local obj = ballEspObjects[ball]
-        if not obj then
-            createBallESP(ball)
-            obj = ballEspObjects[ball]
+        pcall(function()
+            Lighting.ClockTime = 0
+            Lighting.FogEnd = 1000
+            Lighting.Ambient = Color3.fromRGB(20, 20, 40)
+            Lighting.OutdoorAmbient = Color3.fromRGB(10, 10, 25)
+        end)
+        for v in pairs(nightCache) do
+            pcall(function() v.Enabled = false end)
         end
-        if obj.Highlight then
-            obj.Highlight.Enabled = SETTINGS.BB_BallESP
-            obj.Highlight.FillColor = SETTINGS.BB_BallESPColor
-            obj.Highlight.OutlineColor = SETTINGS.BB_BallESPColor
+    else
+        pcall(function()
+            Lighting.ClockTime = savedLighting.clockTime or 14
+            Lighting.Ambient = savedLighting.nightAmbient or Color3.fromRGB(128, 128, 128)
+            Lighting.OutdoorAmbient = savedLighting.nightOutdoor or Color3.fromRGB(128, 128, 128)
+            Lighting.FogEnd = savedLighting.nightFog or 100000
+        end)
+        for v in pairs(nightCache) do
+            pcall(function() v.Enabled = true end)
         end
-        local ballPos, ballVis = Camera:WorldToViewportPoint(ball.Position)
-        if SETTINGS.BB_Tracer and SETTINGS.BB_BallESP and ballVis then
-            obj.Tracer.From = screenBottom
-            obj.Tracer.To = Vector2.new(ballPos.X, ballPos.Y)
-            obj.Tracer.Color = SETTINGS.BB_BallESPColor
-            obj.Tracer.Visible = true
-        else
-            obj.Tracer.Visible = false
-        end
+        nightCache = {}
     end
-    for ball, obj in pairs(ballEspObjects) do
-        if not seenBalls[ball] then
-            if obj.Highlight then obj.Highlight:Destroy() end
-            obj.Tracer:Remove()
-            ballEspObjects[ball] = nil
-        end
-    end
-
-    updateHitboxes()
-end
-
--- ══════════════════════════════════════════════════════════════════
--- 10. Player Tab: 玩家列表 / 传送 / AntiAFK / Rejoin / ServerHop
--- ══════════════════════════════════════════════════════════════════
-local function refreshPlayerList()
-    playerDropdownItems = {}
-    for _, player in pairs(Players:GetPlayers()) do
-        if player ~= LocalPlayer then
-            table.insert(playerDropdownItems, player.Name)
-        end
-    end
-    table.sort(playerDropdownItems)
-    return playerDropdownItems
-end
-
-local function teleportToPlayer(targetName)
-    local targetPlayer = nil
-    for _, player in pairs(Players:GetPlayers()) do
-        if player.Name == targetName then
-            targetPlayer = player
-            break
-        end
-    end
-    if not targetPlayer then
-        notify("传送", "未找到玩家: " .. tostring(targetName), 3, "Warning")
-        return
-    end
-    local targetChar = targetPlayer.Character
-    if not targetChar then
-        notify("传送", "目标玩家尚未生成", 3, "Warning")
-        return
-    end
-    local targetRoot = targetChar:FindFirstChild("HumanoidRootPart")
-    local localChar = getChar()
-    if not targetRoot or not localChar then
-        notify("传送", "无法获取位置信息", 3, "Warning")
-        return
-    end
-    local offset = Vector3.new(math.random(-3, 3), 0, math.random(-3, 3))
-    localChar:PivotTo(CFrame.new(targetRoot.Position + offset))
-    notify("传送", "已传送到: " .. targetPlayer.Name, 2, "Success")
 end
 
 local function rejoin()
-    local placeId = game.PlaceId
-    local jobId = game.JobId
     pcall(function()
-        TeleportService:TeleportToPlaceInstance(placeId, jobId, LocalPlayer)
+        if #Players:GetPlayers() <= 1 then
+            TeleportService:Teleport(game.PlaceId, LocalPlayer)
+        else
+            TeleportService:TeleportToPlaceInstance(game.PlaceId, game.JobId, LocalPlayer)
+        end
     end)
-    notify("Rejoin", "正在重新加入...", 3, "Info")
 end
 
 local function serverHop()
-    local placeId = game.PlaceId
-    pcall(function()
-        TeleportService:Teleport(placeId, LocalPlayer)
+    pcall(function() TeleportService:Teleport(game.PlaceId, LocalPlayer) end)
+end
+
+local function setupAntiAFK()
+    local gc = getconnections or get_signal_cons
+    if gc then
+        local ok = pcall(function()
+            for _, v in pairs(gc(LocalPlayer.Idled)) do
+                if v.Disable then
+                    v:Disable()
+                elseif v.Disconnect then
+                    v:Disconnect()
+                end
+            end
+        end)
+        if ok then return end
+    end
+    idledConn = LocalPlayer.Idled:Connect(function()
+        pcall(function()
+            VirtualUser:CaptureController()
+            VirtualUser:ClickButton2(Vector2.new())
+        end)
     end)
-    notify("ServerHop", "正在跳转到其他服务器...", 3, "Info")
+end
+
+local function sayMessage(msg)
+    pcall(function()
+        local ev = ReplicatedStorage:FindFirstChild("DefaultChatSystemChatEvents")
+        ev = ev and ev:FindFirstChild("SayMessageRequest")
+        if ev then ev:FireServer(msg, "All") end
+    end)
+end
+
+local function getPing()
+    local ok, v = pcall(function()
+        return Stats.Network.ServerStatsItem["Data Ping"]:GetValue()
+    end)
+    if ok and type(v) == "number" then return math.floor(v) end
+    return nil
+end
+
+local function teleportToPlayer(player)
+    if not player or not player.Character then return false end
+    local tr = player.Character:FindFirstChild("HumanoidRootPart")
+    local root = getRoot()
+    if not tr or not root then return false end
+    local offset = Vector3.new(math.random(-3, 3), 0, math.random(-3, 3))
+    return pcall(function() root.CFrame = CFrame.new(tr.Position + offset) end)
+end
+
+local function refreshPlayerList()
+    local out = {}
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p ~= LocalPlayer then out[#out + 1] = p.Name end
+    end
+    table.sort(out)
+    return out
 end
 
 -- ══════════════════════════════════════════════════════════════════
--- 11. 销毁脚本
--- ══════════════════════════════════════════════════════════════════
-local function destroyScript()
-    if isDestroyed then return end
-    isDestroyed = true
-
-    if mainLoopConn then mainLoopConn:Disconnect(); mainLoopConn = nil end
-    if noclipConn then noclipConn:Disconnect(); noclipConn = nil end
-    if infJumpConn then infJumpConn:Disconnect(); infJumpConn = nil end
-    if flyConn then flyConn:Disconnect(); flyConn = nil end
-    if flyBV then flyBV:Destroy(); flyBV = nil end
-    if flyBG then flyBG:Destroy(); flyBG = nil end
-
-    SETTINGS.BB_Noclip = false
-    local char = LocalPlayer.Character
-    if char then
-        for _, part in ipairs(char:GetDescendants()) do
-            if part:IsA("BasePart") then part.CanCollide = true end
-        end
-    end
-    local hum = getHum()
-    if hum then
-        hum.PlatformStand = false
-        hum.WalkSpeed = 16
-        hum.JumpPower = 50
-    end
-
-    disableNightMode()
-    disableFullBright()
-    clearHitboxes()
-
-    for player, obj in pairs(espObjects) do
-        if obj.Highlight then obj.Highlight:Destroy() end
-        pcall(function() obj.NameText:Remove() end)
-        pcall(function() obj.Tracer:Remove() end)
-    end
-    espObjects = {}
-    for ball, obj in pairs(ballEspObjects) do
-        if obj.Highlight then obj.Highlight:Destroy() end
-        pcall(function() obj.Tracer:Remove() end)
-    end
-    ballEspObjects = {}
-
-    if Window then pcall(function() Window:Destroy() end) end
-    if _G.QuantumUI_Window then _G.QuantumUI_Window = nil end
-
-    notify("销毁", "脚本已彻底销毁", 2, "Warning")
-    print("[Blade Ball] 脚本已彻底销毁")
-end
-
--- ══════════════════════════════════════════════════════════════════
--- 12. 构建 Quantum UI 界面
+-- 14. 构建 UI
 -- ══════════════════════════════════════════════════════════════════
 Window = QuantumUI.new({
-    Title = "Blade Ball 辅助",
-    Subtitle = "利刃球",
-    ThemeColor = Color3.fromRGB(255, 80, 160),
+    Title        = "Blade Ball",
+    Subtitle     = "利刃球 v2.0",
+    ThemeColor   = Color3.fromRGB(255, 80, 160),
     Transparency = 0.3,
-    Size = UDim2.new(0, 620, 0, 520),
-    Keybind = Enum.KeyCode.RightShift,
+    Size         = UDim2.new(0, 660, 0, 600),
+    Keybind      = Enum.KeyCode.RightShift,
 })
 
 _G.QuantumUI_Window = Window
 
 task.wait(3.5)
 
--- ========== TAB 1: Combat ==========
-local CombatTab = Window:AddTab({
-    Name = "Combat",
-    Icon = "rbxassetid://6034287594"
+-- ── TAB 1: 格挡 ─────────────────────────────────────────────────
+local ParryTab = Window:AddTab({ Name = "格挡", Icon = "rbxassetid://6034287594" })
+
+ParryTab:AddSection({ Name = "自动格挡" })
+
+ParryTab:AddToggle({
+    Name = "Auto Parry (自动格挡)", Default = false, Flag = "BB_AutoParry",
+    Callback = function(s)
+        SETTINGS.BB_AutoParry = s
+        notify("Auto Parry", s and "已开启" or "已关闭", 2, s and "Success" or "Info")
+    end,
 })
 
-CombatTab:AddSection({ Name = "⚔️ 战斗功能" })
+ParryTab:AddToggle({
+    Name = "Spam Parry (无视距离持续格挡)", Default = false, Flag = "BB_SpamParry",
+    Callback = function(s)
+        SETTINGS.BB_SpamParry = s
+    end,
+})
 
-CombatTab:AddToggle({
-    Name = "Auto Parry (自动格挡)",
-    Default = SETTINGS.BB_AutoParry,
-    Flag = "BB_AutoParry",
-    Callback = function(val)
-        SETTINGS.BB_AutoParry = val
-        notify("Auto Parry", val and "已启用" or "已禁用", 2, val and "Success" or "Warning")
+ParryTab:AddSlider({
+    Name = "格挡距离 (进这个距离直接按)", Min = 5, Max = 30, Default = 14, Increment = 1,
+    Suffix = " studs", Flag = "BB_ParryDistance",
+    Callback = function(v) SETTINGS.BB_ParryDistance = v end,
+})
+
+ParryTab:AddSlider({
+    Name = "预测阈值 (撞击前多久按)", Min = 0.02, Max = 0.4, Default = 0.12, Increment = 0.01,
+    Suffix = "s", Flag = "BB_PredictionThreshold",
+    Callback = function(v) SETTINGS.BB_PredictionThreshold = v end,
+})
+
+ParryTab:AddToggle({
+    Name = "动态阈值 (球越快窗口越紧)", Default = true, Flag = "BB_DynamicThreshold",
+    Callback = function(s) SETTINGS.BB_DynamicThreshold = s end,
+})
+
+ParryTab:AddToggle({
+    Name = "检查格挡冷却 (冷却中不空按)", Default = true, Flag = "BB_CheckCooldown",
+    Callback = function(s) SETTINGS.BB_CheckCooldown = s end,
+})
+
+ParryTab:AddToggle({
+    Name = "键盘回退 (同时模拟 F 键)", Default = true, Flag = "BB_KeyFallback",
+    Callback = function(s) SETTINGS.BB_KeyFallback = s end,
+})
+
+ParryTab:AddSection({ Name = "自动技能" })
+
+ParryTab:AddToggle({
+    Name = "Auto Ability (球瞄你时自动开技能)", Default = false, Flag = "BB_AutoAbility",
+    Callback = function(s)
+        SETTINGS.BB_AutoAbility = s
+        notify("Auto Ability", s and "已开启" or "已关闭", 2, s and "Success" or "Info")
+    end,
+})
+
+ParryTab:AddToggle({
+    Name = "检查技能冷却", Default = true, Flag = "BB_AbilityCheckCD",
+    Callback = function(s) SETTINGS.BB_AbilityCheckCD = s end,
+})
+
+ParryTab:AddSlider({
+    Name = "技能间隔", Min = 0.2, Max = 3, Default = 0.6, Increment = 0.1,
+    Suffix = "s", Flag = "BB_AbilityInterval",
+    Callback = function(v) SETTINGS.BB_AbilityInterval = v end,
+})
+
+ParryTab:AddSection({ Name = "状态" })
+
+local parryCountLabel = ParryTab:AddLabel({ Text = "格挡次数: 0" })
+local cooldownLabel   = ParryTab:AddLabel({ Text = "冷却状态: -" })
+local pingLabel       = ParryTab:AddLabel({ Text = "Ping: -" })
+
+task.spawn(function()
+    while not isDestroyed do
+        pcall(function()
+            if parryCountLabel then
+                parryCountLabel:SetText("格挡次数: " .. tostring(parryCount))
+            end
+            if cooldownLabel then
+                local p = parryOnCooldown()
+                local a = abilityOnCooldown()
+                cooldownLabel:SetText(string.format("冷却状态: 格挡%s / 技能%s",
+                    p and "中" or "就绪", a and "中" or "就绪"))
+            end
+            if pingLabel then
+                local ping = getPing()
+                pingLabel:SetText("Ping: " .. (ping and (ping .. " ms") or "-"))
+            end
+        end)
+        task.wait(0.5)
     end
+end)
+
+ParryTab:AddButton({
+    Name = "立即格挡一次 (测试)",
+    Callback = function()
+        local ok = fireParry()
+        notify("Parry", ok and "已发送格挡" or "远程不可用或冷却中", 2, ok and "Success" or "Warning")
+    end,
 })
 
-CombatTab:AddSlider({
-    Name = "Auto Parry Prediction (预测时间)",
-    Min = 0, Max = 200, Default = SETTINGS.BB_AutoParryPrediction, Increment = 5,
-    Suffix = " ms",
-    Flag = "BB_AutoParryPrediction",
-    Callback = function(val) SETTINGS.BB_AutoParryPrediction = val end
+ParryTab:AddButton({
+    Name = "立即开技能一次 (测试)",
+    Callback = function()
+        local ok = fireAbility()
+        notify("Ability", ok and "已发送技能" or "远程不可用或冷却中", 2, ok and "Success" or "Warning")
+    end,
 })
 
-CombatTab:AddToggle({
-    Name = "Auto Dash (自动冲刺)",
-    Default = SETTINGS.BB_AutoDash,
-    Flag = "BB_AutoDash",
-    Callback = function(val)
-        SETTINGS.BB_AutoDash = val
-        notify("Auto Dash", val and "已启用" or "已禁用", 2, val and "Success" or "Warning")
-    end
+ParryTab:AddButton({
+    Name = "重新探测远程路径",
+    Callback = function()
+        refreshRemotes()
+        notify("BladeBall", string.format("Parry=%s Ability=%s",
+            parryRemote and parryRemote.Name or "未找到",
+            abilityRemote and abilityRemote.Name or "未找到"), 4, "Info")
+    end,
 })
 
-CombatTab:AddSlider({
-    Name = "Dash Cooldown Reduction (冷却减少)",
-    Min = 0, Max = 1, Default = SETTINGS.BB_DashCooldownReduction, Increment = 0.05,
-    Flag = "BB_DashCooldownReduction",
-    Callback = function(val) SETTINGS.BB_DashCooldownReduction = val end
+ParryTab:AddParagraph({
+    Title = "格挡判定原理",
+    Content = table.concat({
+        "公开源码的相对接近速度模型：",
+        "  dirToPlayer  = (charPos - ballPos).Unit",
+        "  speedToward  = ballVel:Dot(dirToPlayer) - charVel:Dot(dirToPlayer)",
+        "  timeToImpact = (dist - 格挡距离) / speedToward",
+        "",
+        "speedToward <= 0 表示球在远离，直接跳过。",
+        "timeToImpact < 阈值 → 按格挡。",
+        "另外 dist <= 格挡距离 时无条件按（近距离兜底）。",
+        "",
+        "v1.0 只判断「距离 < 12」，没有速度预测，",
+        "快速球根本来不及反应；而且它是把几十个远程无参乱发，",
+        "既不会成功也容易触发风控。",
+    }, "\n"),
 })
 
-CombatTab:AddToggle({
-    Name = "Ability Spam (技能连发)",
-    Default = SETTINGS.BB_AbilitySpam,
-    Flag = "BB_AbilitySpam",
-    Callback = function(val)
-        SETTINGS.BB_AbilitySpam = val
-        notify("Ability Spam", val and "已启用" or "已禁用", 2, val and "Success" or "Warning")
-    end
+-- ── TAB 2: 视觉 ─────────────────────────────────────────────────
+local VisualTab = Window:AddTab({ Name = "视觉", Icon = "rbxassetid://6035153470" })
+
+VisualTab:AddSection({ Name = "球 ESP" })
+
+VisualTab:AddToggle({
+    Name = "Ball ESP (球高亮)", Default = false, Flag = "BB_BallESP",
+    Callback = function(s) SETTINGS.BB_BallESP = s end,
 })
-
-CombatTab:AddToggle({
-    Name = "Kill Aura (击杀光环)",
-    Default = SETTINGS.BB_KillAura,
-    Flag = "BB_KillAura",
-    Callback = function(val)
-        SETTINGS.BB_KillAura = val
-        notify("Kill Aura", val and "已启用" or "已禁用", 2, val and "Success" or "Warning")
-    end
+VisualTab:AddColorPicker({
+    Name = "球颜色", Default = Color3.fromRGB(255, 80, 160), Presets = PRESET_COLORS, Flag = "BB_BallESPColor",
+    Callback = function(c) SETTINGS.BB_BallESPColor = c end,
 })
-
-CombatTab:AddToggle({
-    Name = "Reach (增加攻击距离)",
-    Default = SETTINGS.BB_Reach,
-    Flag = "BB_Reach",
-    Callback = function(val)
-        SETTINGS.BB_Reach = val
-        notify("Reach", val and "已启用" or "已禁用", 2, val and "Success" or "Warning")
-    end
+VisualTab:AddToggle({
+    Name = "显示球距离", Default = true, Flag = "BB_BallDistance",
+    Callback = function(s) SETTINGS.BB_BallDistance = s end,
 })
-
-CombatTab:AddSlider({
-    Name = "Reach Studs (攻击距离)",
-    Min = 2, Max = 20, Default = SETTINGS.BB_ReachStuds, Increment = 1,
-    Suffix = " studs",
-    Flag = "BB_ReachStuds",
-    Callback = function(val) SETTINGS.BB_ReachStuds = val end
+VisualTab:AddToggle({
+    Name = "目标指示 (球瞄你时变红 + 标注)", Default = true, Flag = "BB_TargetIndicator",
+    Callback = function(s) SETTINGS.BB_TargetIndicator = s end,
 })
-
--- ========== TAB 2: Visuals ==========
-local VisualsTab = Window:AddTab({
-    Name = "Visuals",
-    Icon = "rbxassetid://6034509993"
+VisualTab:AddToggle({
+    Name = "球追踪线", Default = false, Flag = "BB_BallTracer",
+    Callback = function(s) SETTINGS.BB_BallTracer = s end,
 })
-
-VisualsTab:AddSection({ Name = "👁️ 视觉功能" })
-
-VisualsTab:AddToggle({
-    Name = "Ball ESP (球体透视)",
-    Default = SETTINGS.BB_BallESP,
-    Flag = "BB_BallESP",
-    Callback = function(val)
-        SETTINGS.BB_BallESP = val
-        notify("Ball ESP", val and "已启用" or "已禁用", 2, val and "Success" or "Warning")
-    end
-})
-
-VisualsTab:AddColorPicker({
-    Name = "Ball ESP Color",
-    Default = SETTINGS.BB_BallESPColor,
-    Presets = PRESET_COLORS,
-    Flag = "BB_BallESPColor",
-    Callback = function(c) SETTINGS.BB_BallESPColor = c end
-})
-
-VisualsTab:AddToggle({
-    Name = "Player ESP (玩家透视)",
-    Default = SETTINGS.BB_PlayerESP,
-    Flag = "BB_PlayerESP",
-    Callback = function(val)
-        SETTINGS.BB_PlayerESP = val
-        notify("Player ESP", val and "已启用" or "已禁用", 2, val and "Success" or "Warning")
-    end
-})
-
-VisualsTab:AddColorPicker({
-    Name = "Player ESP Color",
-    Default = SETTINGS.BB_PlayerESPColor,
-    Presets = PRESET_COLORS,
-    Flag = "BB_PlayerESPColor",
-    Callback = function(c) SETTINGS.BB_PlayerESPColor = c end
-})
-
-VisualsTab:AddToggle({
-    Name = "Tracer (追踪线)",
-    Default = SETTINGS.BB_Tracer,
-    Flag = "BB_Tracer",
-    Callback = function(val)
-        SETTINGS.BB_Tracer = val
-        notify("Tracer", val and "已启用" or "已禁用", 2, val and "Success" or "Warning")
-    end
-})
-
-VisualsTab:AddToggle({
-    Name = "Night Mode (夜间模式)",
-    Default = SETTINGS.BB_NightMode,
-    Flag = "BB_NightMode",
-    Callback = function(val)
-        SETTINGS.BB_NightMode = val
-        if val then enableNightMode() else disableNightMode() end
-        notify("Night Mode", val and "已启用" or "已禁用", 2, val and "Success" or "Warning")
-    end
-})
-
-VisualsTab:AddToggle({
-    Name = "Full Bright (全屏亮度)",
-    Default = SETTINGS.BB_FullBright,
-    Flag = "BB_FullBright",
-    Callback = function(val)
-        SETTINGS.BB_FullBright = val
-        if val then enableFullBright() else disableFullBright() end
-        notify("Full Bright", val and "已启用" or "已禁用", 2, val and "Success" or "Warning")
-    end
-})
-
-VisualsTab:AddToggle({
-    Name = "Hitbox Visualizer (碰撞箱显示)",
-    Default = SETTINGS.BB_HitboxVis,
-    Flag = "BB_HitboxVis",
-    Callback = function(val)
-        SETTINGS.BB_HitboxVis = val
-        if not val then clearHitboxes() end
-        notify("Hitbox Visualizer", val and "已启用" or "已禁用", 2, val and "Success" or "Warning")
-    end
-})
-
--- ========== TAB 3: Movement ==========
-local MovementTab = Window:AddTab({
-    Name = "Movement",
-    Icon = "rbxassetid://6034466796"
-})
-
-MovementTab:AddSection({ Name = "🏃 移动功能" })
-
-MovementTab:AddSlider({
-    Name = "Walk Speed (行走速度)",
-    Min = 16, Max = 200, Default = SETTINGS.BB_WalkSpeed, Increment = 1,
-    Suffix = " studs/s",
-    Flag = "BB_WalkSpeed",
-    Callback = function(val) SETTINGS.BB_WalkSpeed = val end
-})
-
-MovementTab:AddToggle({
-    Name = "Enable Walk Speed",
-    Default = SETTINGS.BB_WalkSpeedEnabled,
-    Flag = "BB_WalkSpeedEnabled",
-    Callback = function(val)
-        SETTINGS.BB_WalkSpeedEnabled = val
-        notify("Walk Speed", val and "已启用" or "已禁用", 2, val and "Success" or "Warning")
-        if not val then
-            local hum = getHum()
-            if hum then hum.WalkSpeed = 16 end
+VisualTab:AddToggle({
+    Name = "轨迹预测点 (球将要到达的位置)", Default = false, Flag = "BB_Trajectory",
+    Callback = function(s)
+        SETTINGS.BB_Trajectory = s
+        if not s and trajPart then
+            pcall(function() trajPart:Destroy() end)
+            trajPart = nil
         end
-    end
+    end,
 })
 
-MovementTab:AddSlider({
-    Name = "Jump Power (跳跃力)",
-    Min = 50, Max = 200, Default = SETTINGS.BB_JumpPower, Increment = 1,
-    Flag = "BB_JumpPower",
-    Callback = function(val) SETTINGS.BB_JumpPower = val end
-})
+VisualTab:AddSection({ Name = "玩家 ESP" })
 
-MovementTab:AddToggle({
-    Name = "Enable Jump Power",
-    Default = SETTINGS.BB_JumpPowerEnabled,
-    Flag = "BB_JumpPowerEnabled",
-    Callback = function(val)
-        SETTINGS.BB_JumpPowerEnabled = val
-        notify("Jump Power", val and "已启用" or "已禁用", 2, val and "Success" or "Warning")
-        if not val then
-            local hum = getHum()
-            if hum then hum.JumpPower = 50 end
+VisualTab:AddToggle({
+    Name = "Player ESP (玩家高亮 + 名字)", Default = false, Flag = "BB_PlayerESP",
+    Callback = function(s) SETTINGS.BB_PlayerESP = s end,
+})
+VisualTab:AddColorPicker({
+    Name = "玩家颜色", Default = Color3.fromRGB(0, 200, 255), Presets = PRESET_COLORS, Flag = "BB_PlayerESPColor",
+    Callback = function(c) SETTINGS.BB_PlayerESPColor = c end,
+})
+VisualTab:AddToggle({
+    Name = "玩家追踪线", Default = false, Flag = "BB_PlayerTracer",
+    Callback = function(s) SETTINGS.BB_PlayerTracer = s end,
+})
+VisualTab:AddToggle({
+    Name = "Hitbox 显示", Default = false, Flag = "BB_HitboxVis",
+    Callback = function(s) SETTINGS.BB_HitboxVis = s end,
+})
+VisualTab:AddButton({
+    Name = "清除所有 ESP",
+    Callback = function()
+        clearESP()
+        clearTracers()
+        if trajPart then
+            pcall(function() trajPart:Destroy() end)
+            trajPart = nil
         end
-    end
+        notify("BladeBall", "已清除 ESP", 2, "Success")
+    end,
 })
 
-MovementTab:AddToggle({
-    Name = "Infinite Jump (无限跳)",
-    Default = SETTINGS.BB_InfJump,
-    Flag = "BB_InfJump",
-    Callback = function(val)
-        SETTINGS.BB_InfJump = val
-        if val then enableInfJump() end
-        notify("Infinite Jump", val and "已启用" or "已禁用", 2, val and "Success" or "Warning")
-    end
+VisualTab:AddSection({ Name = "世界" })
+
+VisualTab:AddToggle({
+    Name = "全亮 (Fullbright)", Default = false, Flag = "BB_FullBright",
+    Callback = function(s) SETTINGS.BB_FullBright = s; toggleFullbright(s) end,
+})
+VisualTab:AddToggle({
+    Name = "夜间模式", Default = false, Flag = "BB_NightMode",
+    Callback = function(s) SETTINGS.BB_NightMode = s; toggleNightMode(s) end,
 })
 
-MovementTab:AddToggle({
-    Name = "Noclip (穿墙)",
-    Default = SETTINGS.BB_Noclip,
-    Flag = "BB_Noclip",
-    Callback = function(val)
-        SETTINGS.BB_Noclip = val
-        if val then enableNoclip() end
-        notify("Noclip", val and "已启用" or "已禁用", 2, val and "Success" or "Warning")
-    end
-})
+-- ── TAB 3: 移动 ─────────────────────────────────────────────────
+local MoveTab = Window:AddTab({ Name = "移动", Icon = "rbxassetid://6034466796" })
 
-MovementTab:AddToggle({
-    Name = "Fly (飞行)",
-    Default = SETTINGS.BB_Fly,
-    Flag = "BB_Fly",
-    Callback = function(val)
-        SETTINGS.BB_Fly = val
-        if val then
-            enableFly()
-            notify("Fly", "已启用 (WASD/Space/Shift 控制)", 3, "Success")
-        else
+MoveTab:AddSection({ Name = "基础移动" })
+
+MoveTab:AddToggle({
+    Name = "WalkSpeed", Default = false, Flag = "BB_WalkSpeedEnabled",
+    Callback = function(s)
+        SETTINGS.BB_WalkSpeedEnabled = s
+        if not s then
             local hum = getHum()
-            if hum then hum.PlatformStand = false end
-            notify("Fly", "已禁用", 2, "Warning")
+            if hum then pcall(function() hum.WalkSpeed = 16 end) end
         end
-    end
+    end,
+})
+MoveTab:AddSlider({
+    Name = "WalkSpeed 值", Min = 16, Max = 300, Default = 50, Increment = 1, Flag = "BB_WalkSpeed",
+    Callback = function(v) SETTINGS.BB_WalkSpeed = v end,
 })
 
-MovementTab:AddSlider({
-    Name = "Fly Speed (飞行速度)",
-    Min = 10, Max = 200, Default = SETTINGS.BB_FlySpeed, Increment = 5,
-    Flag = "BB_FlySpeed",
-    Callback = function(val) SETTINGS.BB_FlySpeed = val end
+MoveTab:AddToggle({
+    Name = "JumpPower", Default = false, Flag = "BB_JumpPowerEnabled",
+    Callback = function(s)
+        SETTINGS.BB_JumpPowerEnabled = s
+        if not s then
+            local hum = getHum()
+            if hum then pcall(function() hum.JumpPower = 50 end) end
+        end
+    end,
+})
+MoveTab:AddSlider({
+    Name = "JumpPower 值", Min = 50, Max = 300, Default = 100, Increment = 5, Flag = "BB_JumpPower",
+    Callback = function(v) SETTINGS.BB_JumpPower = v end,
 })
 
--- ========== TAB 4: Player ==========
-local PlayerTab = Window:AddTab({
-    Name = "Player",
-    Icon = "rbxassetid://6031280882"
+MoveTab:AddToggle({
+    Name = "InfJump (无限跳)", Default = false, Flag = "BB_InfJump",
+    Callback = function(s) SETTINGS.BB_InfJump = s; toggleInfJump(s) end,
 })
 
-PlayerTab:AddSection({ Name = "👥 玩家操作" })
+MoveTab:AddSection({ Name = "特殊移动" })
 
-local playerDropdown = PlayerTab:AddDropdown({
-    Name = "玩家列表",
-    Items = refreshPlayerList(),
-    Default = "请选择玩家",
-    Multi = false,
-    Flag = "BB_SelectedPlayer",
-    Callback = function(selected)
-        selectedPlayer = selected
-    end
+MoveTab:AddToggle({
+    Name = "NoClip (穿墙) [V]", Default = false, Flag = "BB_Noclip",
+    Callback = function(s) SETTINGS.BB_Noclip = s; toggleNoclip(s) end,
 })
 
-PlayerTab:AddButton({
-    Name = "🔄 刷新玩家列表",
+MoveTab:AddToggle({
+    Name = "Fly (飞行 WASD+Space/Ctrl) [U]", Default = false, Flag = "BB_Fly",
+    Callback = function(s) SETTINGS.BB_Fly = s; toggleFly(s, SETTINGS.BB_FlySpeed) end,
+})
+MoveTab:AddSlider({
+    Name = "Fly Speed", Min = 10, Max = 400, Default = 80, Increment = 5, Flag = "BB_FlySpeed",
+    Callback = function(v)
+        SETTINGS.BB_FlySpeed = v
+        if SETTINGS.BB_Fly then toggleFly(true, v) end
+    end,
+})
+
+-- ── TAB 4: 玩家 / 杂项 ──────────────────────────────────────────
+local MiscTab = Window:AddTab({ Name = "杂项", Icon = "rbxassetid://6031280882" })
+
+MiscTab:AddSection({ Name = "玩家操作" })
+
+local playerDropdown = MiscTab:AddDropdown({
+    Name = "玩家列表", Items = refreshPlayerList(), Flag = "BB_SelectedPlayer",
+    Callback = function(v) selectedPlayer = v end,
+})
+
+MiscTab:AddButton({
+    Name = "刷新玩家列表",
     Callback = function()
         local items = refreshPlayerList()
         if playerDropdown and playerDropdown.Refresh then
-            playerDropdown:Refresh(items)
+            pcall(function() playerDropdown:Refresh(items) end)
         end
-        notify("玩家列表", "已刷新，共 " .. #items .. " 名玩家", 2, "Info")
-    end
+        notify("BladeBall", "共 " .. #items .. " 名其他玩家", 2, "Info")
+    end,
 })
 
-PlayerTab:AddButton({
-    Name = "🚀 传送到选中玩家",
+MiscTab:AddButton({
+    Name = "传送到选中玩家",
     Callback = function()
         if not selectedPlayer then
-            notify("传送", "请先在下拉列表选择玩家", 3, "Warning")
+            notify("BladeBall", "请先选择玩家", 2, "Warning")
             return
         end
-        teleportToPlayer(selectedPlayer)
-    end
+        local target = Players:FindFirstChild(selectedPlayer)
+        if target and teleportToPlayer(target) then
+            notify("BladeBall", "已传送到 " .. selectedPlayer, 2, "Success")
+        else
+            notify("BladeBall", "传送失败", 2, "Error")
+        end
+    end,
 })
 
-PlayerTab:AddSection({ Name = "🛡️ 防挂机 & 服务器" })
-
-PlayerTab:AddToggle({
-    Name = "Anti AFK (防挂机)",
-    Default = SETTINGS.BB_AntiAFK,
-    Flag = "BB_AntiAFK",
-    Callback = function(val)
-        SETTINGS.BB_AntiAFK = val
-        notify("Anti AFK", val and "已启用" or "已禁用", 2, val and "Success" or "Warning")
-    end
-})
-
-PlayerTab:AddButton({
-    Name = "🔀 Server Hop (换服)",
+MiscTab:AddButton({
+    Name = "传送到球附近",
     Callback = function()
+        local ball = findBestBall()
+        local root = getRoot()
+        if ball and root then
+            pcall(function() root.CFrame = CFrame.new(ball.Position + Vector3.new(0, 3, 0)) end)
+            notify("BladeBall", "已传送到球", 2, "Success")
+        else
+            notify("BladeBall", "当前没有有效球", 2, "Warning")
+        end
+    end,
+})
+
+MiscTab:AddSection({ Name = "服务器" })
+
+MiscTab:AddButton({
+    Name = "重新加入 (Rejoin)",
+    Callback = function()
+        notify("BladeBall", "正在重新加入...", 2, "Info")
+        rejoin()
+    end,
+})
+
+MiscTab:AddButton({
+    Name = "服务器跳转 (Server Hop)",
+    Callback = function()
+        notify("BladeBall", "正在跳转服务器...", 2, "Info")
         serverHop()
-    end
+    end,
 })
-
-PlayerTab:AddButton({
-    Name = "🔁 Rejoin (重连)",
-    Callback = function()
-        rejoin()
-    end
-})
-
--- ========== TAB 5: Keybinds ==========
-local KeybindsTab = Window:AddTab({
-    Name = "Keybinds",
-    Icon = "rbxassetid://6034281467"
-})
-
-KeybindsTab:AddSection({ Name = "⌨️ 快捷键绑定" })
-
-KeybindsTab:AddKeybind({
-    Name = "UI 切换 (默认 RightShift)",
-    Default = Enum.KeyCode.RightShift,
-    Flag = "BB_UIKey",
-    Callback = function()
-        notify("快捷键", "UI 切换键已设置", 2, "Info")
-    end
-})
-
-KeybindsTab:AddKeybind({
-    Name = "AutoParry 切换 (默认 P)",
-    Default = Enum.KeyCode.P,
-    Flag = "BB_AutoParryKey",
-    Callback = function()
-        SETTINGS.BB_AutoParry = not SETTINGS.BB_AutoParry
-        if Window and Window.Flags and Window.Flags["BB_AutoParry"] then
-            pcall(function() Window.Flags["BB_AutoParry"]:Set(SETTINGS.BB_AutoParry) end)
-        end
-        notify("Auto Parry", SETTINGS.BB_AutoParry and "已启用" or "已禁用", 2, SETTINGS.BB_AutoParry and "Success" or "Warning")
-    end
-})
-
-KeybindsTab:AddKeybind({
-    Name = "Noclip 切换 (默认 V)",
-    Default = Enum.KeyCode.V,
-    Flag = "BB_NoclipKey",
-    Callback = function()
-        SETTINGS.BB_Noclip = not SETTINGS.BB_Noclip
-        if SETTINGS.BB_Noclip then enableNoclip() end
-        if Window and Window.Flags and Window.Flags["BB_Noclip"] then
-            pcall(function() Window.Flags["BB_Noclip"]:Set(SETTINGS.BB_Noclip) end)
-        end
-        notify("Noclip", SETTINGS.BB_Noclip and "已启用" or "已禁用", 2, SETTINGS.BB_Noclip and "Success" or "Warning")
-    end
-})
-
--- ========== TAB 6: Misc ==========
-local MiscTab = Window:AddTab({
-    Name = "Misc",
-    Icon = "rbxassetid://6031094678"
-})
-
-MiscTab:AddSection({ Name = "💀 脚本控制" })
-
-MiscTab:AddButton({
-    Name = "🔁 Rejoin (重新加入)",
-    Callback = function()
-        rejoin()
-    end
-})
-
-MiscTab:AddButton({
-    Name = "💀 Destroy (销毁脚本)",
-    Callback = function()
-        destroyScript()
-    end
-})
-
-MiscTab:AddSection({ Name = "🌈 UI 外观" })
 
 MiscTab:AddToggle({
-    Name = "彩虹边框动画",
-    Default = QuantumUI.RainbowEnabled,
-    Flag = "BB_RainbowBorder",
-    Callback = function(state)
-        QuantumUI.RainbowEnabled = state
-        notify("彩虹边框", state and "已启用" or "已禁用", 2, state and "Success" or "Warning")
-    end
+    Name = "Anti-AFK (防挂机踢出)", Default = false, Flag = "BB_AntiAFK",
+    Callback = function(s)
+        SETTINGS.BB_AntiAFK = s
+        if s then setupAntiAFK() end
+    end,
+})
+
+MiscTab:AddSection({ Name = "聊天" })
+
+MiscTab:AddToggle({
+    Name = "自动 GG (场上只剩你时发 gg)", Default = false, Flag = "BB_AutoGG",
+    Callback = function(s)
+        SETTINGS.BB_AutoGG = s
+        if s then notify("BladeBall", "已开启自动 GG", 2, "Success") end
+    end,
+})
+
+MiscTab:AddSection({ Name = "UI 外观" })
+
+MiscTab:AddToggle({
+    Name = "彩虹边框动画", Default = QuantumUI.RainbowEnabled, Flag = "BB_RainbowBorder",
+    Callback = function(state) QuantumUI.RainbowEnabled = state end,
 })
 
 MiscTab:AddSlider({
-    Name = "彩虹速度",
-    Min = 0.1, Max = 5, Default = QuantumUI.RainbowSpeed, Increment = 0.1,
-    Suffix = "x",
-    Flag = "BB_RainbowSpeed",
-    Callback = function(value) QuantumUI.RainbowSpeed = value end
+    Name = "彩虹速度", Min = 0.1, Max = 5, Default = QuantumUI.RainbowSpeed or 1, Increment = 0.1,
+    Suffix = "x", Flag = "BB_RainbowSpeed",
+    Callback = function(v) QuantumUI.RainbowSpeed = v end,
 })
 
 MiscTab:AddDropdown({
-    Name = "预设主题色 (7种)",
-    Items = {"Pink", "Cyan", "Purple", "Green", "Red", "Gold", "HotPink"},
-    Default = "Pink",
-    Flag = "BB_ThemePreset",
-    Callback = function(selected)
-        local color = THEME_PRESETS[selected]
+    Name = "预设主题色", Items = { "Pink", "Cyan", "Purple", "Green", "Red", "Gold", "HotPink" },
+    Default = "Pink", Flag = "BB_ThemePreset",
+    Callback = function(sel)
+        local color = THEME_PRESETS[sel]
         if color then
             Window.ThemeColor = color
             QuantumUI.ThemeColor = color
             Window:RefreshTheme()
-            notify("主题", "已切换: " .. selected, 2, "Success")
+            notify("主题", "已切换: " .. sel, 2, "Success")
         end
-    end
+    end,
 })
 
-MiscTab:AddSection({ Name = "📖 About (关于)" })
+MiscTab:AddSection({ Name = "脚本" })
+
+MiscTab:AddButton({
+    Name = "卸载脚本 (清理全部改动)",
+    Callback = function()
+        if _G.BB_Cleanup then _G.BB_Cleanup() end
+    end,
+})
 
 MiscTab:AddParagraph({
-    Title = "Blade Ball 辅助 v1.0",
+    Title = "Blade Ball v2.0",
     Content = table.concat({
-        "游戏: Blade Ball / 利刃球",
-        "UI 框架: Quantum UI (SciFi-UI-Library)",
+        "PlaceId: 13772394625",
         "",
-        "功能列表:",
-        "  Combat: AutoParry / AutoDash / AbilitySpam",
-        "          KillAura / Reach",
-        "  Visuals: BallESP / PlayerESP / Tracer",
-        "           NightMode / FullBright / HitboxVis",
-        "  Movement: WalkSpeed / JumpPower / InfJump",
-        "            Noclip / Fly",
-        "  Player: TP玩家 / AntiAFK / ServerHop / Rejoin",
+        "v2.0 主要修正:",
+        "  • 远程改用精确路径 ParryButtonPress / AbilityButtonPress",
+        "  • 球只从 workspace.Balls 取, 用 realBall 属性判定",
+        "  • 格挡改用撞击时间预测, 不再是死判距离",
+        "  • 新增冷却读取, 冷却中不空按",
         "",
-        "快捷键:",
-        "  RightShift - 隐藏/显示 UI",
-        "  P          - AutoParry 开关",
-        "  V          - Noclip 开关",
+        "v2.0 新增: 动态阈值 / 轨迹预测点 / 目标指示 /",
+        "  键盘回退 / 自动技能 / Ping 与格挡计数",
         "",
-        "安全说明: 本脚本不采集任何信息，",
-        "不 loadstring 外部功能代码，",
-        "所有逻辑均为本地实现。",
-    }, "\n")
+        "快捷键: P=AutoParry  V=NoClip  U=Fly  RightShift=UI",
+    }, "\n"),
 })
 
 -- ══════════════════════════════════════════════════════════════════
--- 13. 主初始化 & 主循环
+-- 15. 快捷键
 -- ══════════════════════════════════════════════════════════════════
-task.wait(0.5)
+local inputConn = UserInputService.InputBegan:Connect(function(input, processed)
+    if processed or isDestroyed then return end
+    local key = input.KeyCode
 
-ensureRemotes()
-
-mainLoopConn = RunService.RenderStepped:Connect(function()
-    updateCombat()
-    updateMovement()
-    updateVisuals()
-end)
-
--- Anti AFK 绑定
-LocalPlayer.Idled:Connect(function()
-    if SETTINGS.BB_AntiAFK and not isDestroyed then
-        VirtualUser:Button2Down(Vector2.new(0, 0), workspace.CurrentCamera.CFrame)
-        task.wait(1)
-        VirtualUser:Button2Up(Vector2.new(0, 0), workspace.CurrentCamera.CFrame)
+    if key == Enum.KeyCode.P then
+        local s = not SETTINGS.BB_AutoParry
+        SETTINGS.BB_AutoParry = s
+        if Window and Window.Flags and Window.Flags["BB_AutoParry"] then
+            pcall(function() Window.Flags["BB_AutoParry"]:Set(s) end)
+        end
+        notify("P", s and "Auto Parry ON" or "Auto Parry OFF", 1.5, "Info")
+    elseif key == Enum.KeyCode.V then
+        local s = not SETTINGS.BB_Noclip
+        SETTINGS.BB_Noclip = s
+        toggleNoclip(s)
+        if Window and Window.Flags and Window.Flags["BB_Noclip"] then
+            pcall(function() Window.Flags["BB_Noclip"]:Set(s) end)
+        end
+        notify("V", s and "NoClip ON" or "NoClip OFF", 1.5, "Info")
+    elseif key == Enum.KeyCode.U then
+        local s = not SETTINGS.BB_Fly
+        SETTINGS.BB_Fly = s
+        toggleFly(s, SETTINGS.BB_FlySpeed)
+        notify("U", s and "Fly ON" or "Fly OFF", 1.5, "Info")
     end
 end)
 
--- 角色重生处理
-LocalPlayer.CharacterAdded:Connect(function()
-    task.wait(0.5)
+-- ══════════════════════════════════════════════════════════════════
+-- 16. 主循环
+-- ══════════════════════════════════════════════════════════════════
+charAddedConn = LocalPlayer.CharacterAdded:Connect(function()
+    task.wait(1)
     if isDestroyed then return end
-    if SETTINGS.BB_Noclip then enableNoclip() end
-    if SETTINGS.BB_InfJump then enableInfJump() end
-    if SETTINGS.BB_Fly then enableFly() end
-    if SETTINGS.BB_NightMode then enableNightMode() end
-    if SETTINGS.BB_FullBright then enableFullBright() end
+    if SETTINGS.BB_Noclip then toggleNoclip(true) end
+    if SETTINGS.BB_InfJump then toggleInfJump(true) end
+    if SETTINGS.BB_Fly then toggleFly(true, SETTINGS.BB_FlySpeed) end
+end)
+
+-- 自动 GG: 场上只剩自己时发一句
+task.spawn(function()
+    while not isDestroyed do
+        if SETTINGS.BB_AutoGG and not ggDebounce then
+            local aliveFolder = Workspace:FindFirstChild("Alive")
+            if aliveFolder and #aliveFolder:GetChildren() <= 1 then
+                ggDebounce = true
+                task.wait(math.random(2, 4))
+                sayMessage("gg")
+                task.wait(5)
+                ggDebounce = false
+            end
+        end
+        task.wait(1)
+    end
+end)
+
+-- 远程探测保活: 换局后远程实例可能重建
+task.spawn(function()
+    while not isDestroyed do
+        task.wait(5)
+        if not (parryRemote and parryRemote.Parent) or not (abilityRemote and abilityRemote.Parent) then
+            refreshRemotes()
+        end
+    end
+end)
+
+local lastVisual = 0
+mainConn = RunService.RenderStepped:Connect(function()
+    if isDestroyed then return end
+    pcall(combatStep)
+    pcall(movementStep)
+    pcall(tracerStep)
+
+    local now = tick()
+    if now - lastVisual >= 0.1 then
+        lastVisual = now
+        pcall(updateBallVisuals)
+        pcall(updateHitboxes)
+    end
 end)
 
 -- ══════════════════════════════════════════════════════════════════
--- 14. 加载完成通知
+-- 17. 清理
 -- ══════════════════════════════════════════════════════════════════
-task.wait(0.3)
-notify("✅ Blade Ball 辅助加载完成!",
-    "Quantum UI 版本\n" ..
-    "按 RightShift 切换 UI 显示\n" ..
-    "按 P 切换 AutoParry\n" ..
-    "按 V 切换 Noclip",
-    6, "Success")
+local function cleanup()
+    if isDestroyed then return end
+    isDestroyed = true
 
-print("========================================")
-print(" Blade Ball 辅助 v1.0 (Quantum UI 版) 加载完成")
-print("   RightShift - 隐藏/显示 UI")
-print("   P          - AutoParry 开关")
-print("   V          - Noclip 开关")
-print("========================================")
+    local conns = {
+        inputConn, charAddedConn, mainConn, noclipConn,
+        infJumpConn, flyConn, idledConn,
+    }
+    for _, c in ipairs(conns) do
+        if c then pcall(function() c:Disconnect() end) end
+    end
+
+    if flyBV then pcall(function() flyBV:Destroy() end) end
+    if flyBG then pcall(function() flyBG:Destroy() end) end
+    if trajPart then pcall(function() trajPart:Destroy() end) end
+
+    for _, box in pairs(hitboxBoxes) do
+        pcall(function() box:Destroy() end)
+    end
+    hitboxBoxes = {}
+
+    clearESP()
+    clearTracers()
+    toggleFullbright(false)
+    toggleNightMode(false)
+
+    local hum = getHum()
+    if hum then
+        pcall(function()
+            hum.WalkSpeed = 16
+            hum.JumpPower = 50
+            hum.PlatformStand = false
+        end)
+    end
+    local char = LocalPlayer.Character
+    if char then
+        for _, part in ipairs(char:GetDescendants()) do
+            if part:IsA("BasePart") then
+                pcall(function() part.CanCollide = true end)
+            end
+        end
+    end
+
+    if Window then
+        pcall(function() Window:Destroy() end)
+        Window = nil
+    end
+    _G.QuantumUI_Window = nil
+
+    pcall(function()
+        StarterGui:SetCore("SendNotification", {
+            Title = "BladeBall", Text = "脚本已卸载", Duration = 2,
+        })
+    end)
+end
+
+_G.BB_Cleanup = cleanup
+
+task.wait(0.5)
+notify("Blade Ball v2.0", "Blade Ball 辅助已加载\n按 RightShift 打开 UI", 5, "Success")
+
+print(string.format("[BladeBall] v2.0 (PlaceId: %d) 加载完成 | Drawing: %s",
+    game.PlaceId, hasDrawing and "可用" or "不可用(不影响功能)"))
