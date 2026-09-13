@@ -6005,4 +6005,21 @@ function QuantumUI:DangerConfirm(options)
     end)
 end
 
+-- ═══════════════════════════════════════════════════════════════════
+--  插件扩展点（v3.4）：供 SciFi-UI-Library/music.lua 等分支模块复用
+--  内部工具（Utility / Sounds / CustomAssets）在此导出，分支模块无需
+--  重复实现，也避免破坏既有 API。
+-- ═══════════════════════════════════════════════════════════════════
+QuantumUI.Internals = {
+    Utility      = Utility,
+    Sounds       = Sounds,
+    CustomAssets = CustomAssets,
+    Themes       = Themes,
+    ThemeOrder   = ThemeOrder,
+    LayoutOrder  = LayoutOrder,
+    Mouse        = Mouse,
+    LocalPlayer  = LocalPlayer,
+    IsMobile     = IsMobile,
+}
+
 return QuantumUI
