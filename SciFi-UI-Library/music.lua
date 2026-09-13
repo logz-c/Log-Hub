@@ -1891,9 +1891,17 @@ local function musicSelectHook(cls)
 
     -- 关闭音乐窗口 → 回到上一个普通页签并恢复主窗口
     function cls:_MusicRestore()
+        if self._MusicOpenWindow then
+            pcall(function() self._MusicOpenWindow:Hide() end)
+            self._MusicOpenWindow = nil
+        end
         showMainWindow(self, true)
-        self._MusicOpenWindow = nil
         local back = self._MusicPrevTab
+        if not (back and back.Page and back.Page.Parent) then
+            for _, t in ipairs(self.Tabs or {}) do
+                if not t.IsMusicTab then back = t break end
+            end
+        end
         if back and back.Page and back.Page.Parent then
             pcall(orig, self, back)
         end
@@ -2002,7 +2010,11 @@ local function installAddMusicTab(cls)
             if musicWinRef then
                 musicWinRef:Hide()
                 winSelf._MusicOpenWindow = nil
-                showMainWindow(winSelf, true)
+                if type(winSelf._MusicRestore) == "function" then
+                    pcall(winSelf._MusicRestore, winSelf)
+                else
+                    showMainWindow(winSelf, true)
+                end
             end
         end
         function tab:GetMusicWindow() return musicWinRef end
