@@ -77,7 +77,7 @@ local GAME_REGISTRY = {
         PlaceIds = { 9872472334 },
         GameIds  = { 11818772280 },
         ScriptPath = "/Evade_QuantumUI.lua",
-        Description = "v2.0: 基于真实源码还原 — 自动重生(ChangePlayerMode) + 即时复活/搬运(Interact Revive/Carry) + 自动复活 + 快速复活(ReviveTime) + Money/AFK/Ticket Farm + CFrame Speed Boost(MoveDirection) + NoClip/Fly + Nextbot/玩家/倒地/票券ESP + 全亮 + 移除障碍/KillBricks + Rejoin + Anti-AFK",
+        Description = "v3.0: 修正 v2.0 三处核心远程错误 — 重生改走 Events.Respawn:FireServer(), 复活改走 Events.Revive.RevivePlayer(name,bool), 加速改用 hookmetamethod 拦截 Communicator:InvokeServer('update') 真绕过; Nextbot 根部件修正为 HRP, 倒地判定改用 Downed 属性 — 新增 AutoBhop/AutoStrafe/自动喝可乐/吹口哨/关相机抖动/FOV/降画质/Tracer/BoxESP/模式跳转/AntiDown/Troll倒地玩家; 保留 Money/AutoWin/Ticket/AFK Farm + 即时复活/搬运 + 快速复活 + NoClip/Fly/InfJump + Nextbot/玩家/倒地/票券ESP + 全亮/去雾/XRay + 移除障碍/KillBricks + Rejoin/Anti-AFK",
     },
     {
         Name = "The Strongest Battlegrounds (最强战场)",
