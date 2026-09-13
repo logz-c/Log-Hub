@@ -11,7 +11,12 @@
     ║   local Tab  = Win:AddMusicTab({Name="MUSIC", Icon="rbxassetid://…"}) ║
     ╠══════════════════════════════════════════════════════════════════╣
     ║   新增 API                                                        ║
-    ║   Window:AddMusicTab(opts)        音乐分支（页签）                 ║
+    ║   Window:AddMusicTab(opts)        音乐分支（默认弹出式）           ║
+    ║       · 选中该分支 → 隐藏主窗口 + 弹出音乐窗口（二者不并存）      ║
+    ║       · 关闭音乐窗口 / 切到其它页签 → 自动恢复主窗口与上一个页签  ║
+    ║       · opts.Popup = false 可改为内联（内容直接铺在主窗口页面里）  ║
+    ║       · opts.WindowSize / WindowPosition / Title 控制弹出窗口      ║
+    ║   Tab:OpenMusic() / CloseMusic() / GetMusicWindow()               ║
     ║   Window:CreateMusicWindow(opts)  独立浮动音乐窗口                 ║
     ║   Tab:AddMusicPlayer(opts)        播放卡片（封面/标题/传输键/进度/音量）║
     ║   Tab:AddSearchBox(opts)          搜索框（防抖 / 清空）            ║
@@ -1868,6 +1873,53 @@ local function buildMusicPage(win, page, opts)
 end
 
 -- ═══════════════════════════════════════════════════════════════════
+--  弹出式音乐窗口：选中 MUSIC 分支 → 隐藏主窗口 + 显示音乐窗口
+--  关闭音乐窗口 / 切到其它页签 → 恢复主窗口（二者不并存）
+-- ═══════════════════════════════════════════════════════════════════
+local function showMainWindow(win, on)
+    if win and win.MainFrame then
+        pcall(function() win.MainFrame.Visible = on and true or false end)
+    end
+end
+
+local function musicSelectHook(cls)
+    if cls._MusicSelectHooked then return end
+    local orig = cls.SelectTab
+    if type(orig) ~= "function" then return end
+    cls._MusicSelectHooked = true
+    cls._MusicOrigSelectTab = orig
+
+    -- 关闭音乐窗口 → 回到上一个普通页签并恢复主窗口
+    function cls:_MusicRestore()
+        showMainWindow(self, true)
+        self._MusicOpenWindow = nil
+        local back = self._MusicPrevTab
+        if back and back.Page and back.Page.Parent then
+            pcall(orig, self, back)
+        end
+        return true
+    end
+
+    function cls:SelectTab(tab)
+        local prev = self.SelectedTab
+        local res = orig(self, tab)
+        if type(tab) == "table" and tab.IsMusicTab and tab._MusicWindow then
+            if prev and not prev.IsMusicTab then self._MusicPrevTab = prev end
+            showMainWindow(self, false)
+            tab._MusicWindow:Show()
+            self._MusicOpenWindow = tab._MusicWindow
+        else
+            showMainWindow(self, true)
+            if self._MusicOpenWindow then
+                pcall(function() self._MusicOpenWindow:Hide() end)
+                self._MusicOpenWindow = nil
+            end
+        end
+        return res
+    end
+end
+
+-- ═══════════════════════════════════════════════════════════════════
 --  Window:AddMusicTab(opts)
 -- ═══════════════════════════════════════════════════════════════════
 local function installAddMusicTab(cls)
@@ -1896,15 +1948,68 @@ local function installAddMusicTab(cls)
         end
         table.insert(self.Tabs, tab)
 
-        local mt = buildMusicPage(self, page, options)
+        -- 默认「弹出式」：内容构建进独立音乐窗口，主窗口不并存
+        local popup = options.Popup ~= false
+        local mt = nil
+        if popup and type(self.CreateMusicWindow) == "function" then
+            local okMw, mw = pcall(function()
+                return self:CreateMusicWindow({
+                    Title = options.Title or ("♪ " .. tostring(tabName)),
+                    Size = options.WindowSize or UDim2.new(0, 390, 0, 560),
+                    Position = options.WindowPosition,
+                    OnClose = function()
+                        if type(self._MusicRestore) == "function" then
+                            pcall(self._MusicRestore, self)
+                        else
+                            showMainWindow(self, true)
+                        end
+                    end,
+                })
+            end)
+            if okMw and mw then
+                mw:Hide()
+                tab._MusicWindow = mw
+                mt = mw
+            end
+        end
+
+        if not mt then
+            popup = false
+            mt = buildMusicPage(self, page, options)
+        end
+
         -- 合并音乐 API 到 tab
         for k, v in pairs(mt) do
             if type(v) == "function" then tab[k] = v end
         end
         tab.Music = mt
         tab.IsMusicTab = true
+        tab.IsPopupMusic = popup
 
-        if #self.Tabs == 1 and self.CurrentLayout ~= "Grid" and self.CurrentLayout ~= "Float" then
+        -- 手动开关（不经过页签点击）
+        local musicWinRef = tab._MusicWindow
+        local winSelf = self
+        function tab:OpenMusic()
+            if musicWinRef then
+                showMainWindow(winSelf, false)
+                musicWinRef:Show()
+                winSelf._MusicOpenWindow = musicWinRef
+            elseif tab.Page then
+                tab.Page.Visible = true
+            end
+        end
+        function tab:CloseMusic()
+            if musicWinRef then
+                musicWinRef:Hide()
+                winSelf._MusicOpenWindow = nil
+                showMainWindow(winSelf, true)
+            end
+        end
+        function tab:GetMusicWindow() return musicWinRef end
+
+        -- 内联模式下沿用原有自动选中逻辑；弹出模式下不抢占首屏
+        if not popup and #self.Tabs == 1
+            and self.CurrentLayout ~= "Grid" and self.CurrentLayout ~= "Float" then
             if type(self.SelectTab) == "function" then self:SelectTab(tab) end
         end
 
@@ -1923,6 +2028,21 @@ local function installCreateMusicWindow(cls)
 
         local accent = themeColor(self, "Accent")
         local w = options.Size or UDim2.new(0, 380, 0, 560)
+
+        -- 未指定位置时：叠在主窗口正上方（视觉上「替换」而非并存）
+        local pos = options.Position
+        if not pos and self.MainFrame then
+            local okMf, mf = pcall(function()
+                return {
+                    X = self.MainFrame.AbsolutePosition.X + self.MainFrame.AbsoluteSize.X / 2,
+                    Y = self.MainFrame.AbsolutePosition.Y + self.MainFrame.AbsoluteSize.Y / 2,
+                }
+            end)
+            if okMf and mf and mf.X > 0 then
+                pos = UDim2.new(0, mf.X - w.X.Offset / 2, 0, mf.Y - w.Y.Offset / 2)
+            end
+        end
+
         local win = Util.Create("Frame", {
             Parent = host,
             Name = "MusicWindow",
@@ -1930,7 +2050,7 @@ local function installCreateMusicWindow(cls)
             BackgroundTransparency = 0.06,
             BorderSizePixel = 0,
             Size = w,
-            Position = options.Position or UDim2.new(0.5, -w.X.Offset / 2, 0.5, -w.Y.Offset / 2),
+            Position = pos or UDim2.new(0.5, -w.X.Offset / 2, 0.5, -w.Y.Offset / 2),
             Active = true,
             ZIndex = 40,
         })
@@ -2018,8 +2138,9 @@ function MusicUI.Attach(cls)
         error("[MusicUI] Attach(QuantumUI) 需要传入 QuantumUI 类表")
     end
     bindInternals(cls)
-    installAddMusicTab(cls)
     installCreateMusicWindow(cls)
+    installAddMusicTab(cls)
+    musicSelectHook(cls)
     cls.MusicUI = MusicUI
     return MusicUI
 end
