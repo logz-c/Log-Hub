@@ -22,12 +22,13 @@
 <td width="50%">
 
 ### 🎨 Visual Design
-- **Sci-Fi Holographic Theme** - Futuristic design with scanlines
+- **7 Color Themes** - Cyan / Gold / Violet / Frost / Mono / Cyber / Sakura
+- **4 Visual Styles** - Sharp / Soft / Round / Glass (形状与质感层)
+- **6 Layouts** - Default / Rail / TopBar / Grid / Float / Vape
 - **Rainbow Gradient Borders** - Animated color-shifting borders
 - **Smooth Animations** - Fluid transitions and effects
 - **Loading Animation** - Stunning startup sequence with sounds
-- **Screen Flash Effects** - Visual feedback on actions
-- **Theme Color System** - Real-time theme propagation to 30+ UI elements
+- **Theme Color System** - Real-time propagation to 30+ UI elements
 
 </td>
 <td width="50%">
@@ -418,6 +419,44 @@ When loading a config, all UI elements with matching flags are automatically upd
 - **Toggles** play animation + sound on state change
 - **Color Pickers** update their displayed color
 - **Settings Tab** controls (Theme Color, Transparency, Rainbow, etc.) sync to loaded values
+
+### 🎛️ 外观风格 Appearance (v3.4) — Layout / Theme / Style
+
+三层解耦：**布局**管结构、**配色**管颜色、**视觉风格**管形状与质感。三者可在
+Settings 里独立切换，任意组合，并自动持久化到 `LayoutPrefs`。
+
+| 层 | 数量 | 取值 | API |
+|---|---|---|---|
+| 布局 Layout | 6 | `Default` `Rail` `TopBar` `Grid` `Float` `Vape` | `Window:SwitchLayout(name)` |
+| 配色 Theme | 7 | `Cyan` `Gold` `Violet` `Frost` `Mono` `Cyber` `Sakura` | `Window:SwitchTheme(name)` |
+| 视觉风格 Style | 4 | `Sharp` `Soft` `Round` `Glass` | `Window:SwitchStyle(name)` |
+
+```lua
+-- 新窗口直接指定
+local Win = QuantumUI.new({ Layout = "Vape", Theme = "Cyber", Style = "Soft" })
+
+-- 运行时切换（会同步刷新整棵 UI 树，控件数值/回调不丢）
+Win:SwitchStyle("Glass")   -- 锐利 / 柔和 / 圆润 / 玻璃
+Win:SwitchTheme("Sakura")  -- 极简黑白 / 赛博霓虹 / 樱花
+Win:SwitchLayout("Vape")
+
+-- 手动把风格应用到自定义面板（MusicUI 分支等）
+Win:ApplyStyleToTree(Win.MainFrame)
+```
+
+**风格参数**（`QuantumUI.Styles`）：
+
+| Style | 圆角 | 全圆元素 | 描边 | 说明 |
+|---|---|---|---|---|
+| `Sharp` 锐利 | 0px | 强制方角 | 70% | 默认，原 v3.3 方角外观 |
+| `Soft` 柔和 | 8px | 保持圆形 | 62% | 开关/滑块仍是胶囊 |
+| `Round` 圆润 | 18px | 保持圆形 | 55% | 大圆角卡片感 |
+| `Glass` 玻璃 | 12px | 保持圆形 | 35% | 半透明 + 高亮描边 |
+
+实现要点：`UICorner` **一律真实创建**并把原始意图写进属性
+（`QBaseRadius` / `QFullRound`），方角模式 = `CornerRadius 0`。
+切换风格时遍历全树重算半径与描边，**不重建 UI**，所以控件状态零损耗。
+需要排除的元素加属性 `StyleExempt = true` 即可。
 
 ### Theme System
 

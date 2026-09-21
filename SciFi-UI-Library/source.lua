@@ -494,12 +494,19 @@ local CornerState = {
 
 local MAX_RADIUS = 28
 
+-- 属性读取兜底（极少数执行器可能禁用 Attribute）
+local function attrOf(inst, name)
+    local ok, v = pcall(function() return inst:GetAttribute(name) end)
+    if ok then return v end
+    return nil
+end
+
 local function resolveCorner(inst)
     if CornerState.Radius <= 0 then return UDim.new(0, 0) end
-    if CornerState.FullRound and inst:GetAttribute("QFullRound") then
+    if CornerState.FullRound and attrOf(inst, "QFullRound") then
         return UDim.new(1, 0)
     end
-    local base = inst:GetAttribute("QBaseRadius") or 0
+    local base = attrOf(inst, "QBaseRadius") or 0
     if base <= 0 then base = 8 end
     local px = math.floor(base * CornerState.Scale + 0.5)
     if px < 1 then px = 1 end
@@ -519,8 +526,8 @@ function Utility.Create(className, properties, children)
         local inst = Instance.new("UICorner")
         local want = (properties and properties.CornerRadius) or UDim.new(0, 8)
         local full = (want.Scale >= 1) or (want.Offset >= 999)
-        inst:SetAttribute("QFullRound", full)
-        inst:SetAttribute("QBaseRadius", math.floor(want.Offset + 0.5))
+        pcall(function() inst:SetAttribute("QFullRound", full) end)
+        pcall(function() inst:SetAttribute("QBaseRadius", math.floor(want.Offset + 0.5)) end)
         inst.CornerRadius = resolveCorner(inst)
         for prop, value in pairs(properties or {}) do
             if prop ~= "Parent" and prop ~= "CornerRadius" then
@@ -2446,7 +2453,7 @@ function QuantumUI:ApplyStyleToTree(root)
     local st = self.ActiveStyle
     if not st then return end
     local function visit(inst)
-        if inst:GetAttribute("StyleExempt") then return end
+        if attrOf(inst, "StyleExempt") then return end
         if inst:IsA("UICorner") then
             inst.CornerRadius = resolveCorner(inst)
         elseif inst:IsA("UIStroke") then
@@ -2472,8 +2479,12 @@ function QuantumUI:SwitchStyle(styleName)
     CornerState.Scale     = self.ActiveStyle.Radius / 8
     CornerState.FullRound = self.ActiveStyle.FullRound
 
-    self:ApplyStyleToTree(self.MainFrame)
+    -- 从 ScreenGui 根节点整树过一遍：主窗口 + Tab 页 + 通知 + 悬浮球
+    -- + 外部模块（MusicUI 的独立音乐窗口）一起跟上风格
+    self:ApplyStyleToTree(self.ScreenGui or self.MainFrame)
     for _, t in ipairs(self.Tabs) do
+        -- Grid / Float 布局下页面可能挂在 ScreenGui 上，单独过一遍兜底
+        if t.Page then self:ApplyStyleToTree(t.Page) end
         if t.Panel then self:ApplyStyleToTree(t.Panel) end
     end
     -- 玻璃模式：整体再透一点
