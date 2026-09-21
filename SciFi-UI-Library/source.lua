@@ -1,22 +1,28 @@
 --[[
     ╔══════════════════════════════════════════════════════════════════╗
     ║                        QUANTUM UI LIBRARY                        ║
-    ║            Version 3.3.0 - Layout & Theme Engine                 ║
+    ║            Version 3.4.0 - Style Engine                          ║
     ║                         Created by log_quick                     ║
+    ║                                                                  ║
+    ║  Changelog v3.4.0:                                              ║
+    ║  • NEW: 视觉风格 Style 层（锐利/柔和/圆润/玻璃），与配色解耦，   ║
+    ║       Settings 内实时切换 + 持久化，控件状态/回调零损耗          ║
+    ║  • NEW: Window:SwitchStyle(name) / Window:ApplyStyleToTree(root) ║
+    ║  • NEW: 配色主题 +3（极简黑白 Mono / 赛博霓虹 Cyber / 樱花 Sakura）║
+    ║  • CHG: 圆角改为运行时解析 —— UICorner 一律真实创建并记录原始   ║
+    ║       意图，方角模式 = CornerRadius 0，切风格无需重建 UI         ║
+    ║  • CHG: Vape 布局重做（紧凑顶栏 + 下划线页签 + 底部状态栏）      ║
     ║                                                                  ║
     ║  Changelog v3.3.0:                                              ║
     ║  • NEW: 6 种布局排版实时切换（经典默认/侧栏图标/顶栏双栏/        ║
     ║       卡片平铺/浮动面板/Vape风格），Settings 内自由选择          ║
-    ║  • NEW: 4 套配色主题（青蓝/黑金/霓虹紫/冰霜）实时切换 + 持久化  ║
     ║  • NEW: Window:SwitchLayout(name) / Window:SwitchTheme(name) API ║
-    ║  • NEW: 布局切换时 Tab 页面整体搬运，控件数值/回调/状态无损     ║
-    ║  • FIX: 切换布局后窗口位置保持，不再跳至屏幕中心                ║
     ╚══════════════════════════════════════════════════════════════════╝
 --]]
 
 local QuantumUI = {}
 QuantumUI.__index = QuantumUI
-QuantumUI.Version = "3.3.0"
+QuantumUI.Version = "3.4.0"
 QuantumUI.Author = "log_quick"
 QuantumUI.ThemeColor = Color3.fromRGB(0, 200, 255)
 QuantumUI.Transparency = 0.3
@@ -82,8 +88,73 @@ local Themes = {
         TextDim = Color3.fromRGB(106, 122, 157), TextFaint = Color3.fromRGB(120, 135, 168),
         TextOnAccent = Color3.fromRGB(255, 255, 255),
     },
+    -- ── v3.4 新增 ────────────────────────────────────────────────
+    Mono = {
+        DisplayName = "极简黑白 Mono",
+        Accent = Color3.fromRGB(245, 245, 245),
+        MainBg = Color3.fromRGB(10, 10, 10),   TopBar = Color3.fromRGB(16, 16, 16),
+        TabBg = Color3.fromRGB(13, 13, 13),    Section = Color3.fromRGB(20, 20, 20),
+        Control = Color3.fromRGB(26, 26, 26),  ControlHover = Color3.fromRGB(34, 34, 34),
+        ControlAlt = Color3.fromRGB(44, 44, 44), ControlHover2 = Color3.fromRGB(56, 56, 56),
+        Text = Color3.fromRGB(255, 255, 255),  TextBright = Color3.fromRGB(230, 230, 230),
+        TextDim = Color3.fromRGB(170, 170, 170), TextFaint = Color3.fromRGB(120, 120, 120),
+        TextOnAccent = Color3.fromRGB(12, 12, 12),
+    },
+    Cyber = {
+        DisplayName = "赛博霓虹 Cyber",
+        Accent = Color3.fromRGB(255, 42, 141),
+        MainBg = Color3.fromRGB(8, 6, 18),     TopBar = Color3.fromRGB(14, 10, 28),
+        TabBg = Color3.fromRGB(11, 8, 22),     Section = Color3.fromRGB(18, 13, 34),
+        Control = Color3.fromRGB(24, 18, 44),  ControlHover = Color3.fromRGB(34, 25, 60),
+        ControlAlt = Color3.fromRGB(44, 32, 78), ControlHover2 = Color3.fromRGB(58, 42, 100),
+        Text = Color3.fromRGB(240, 230, 255),  TextBright = Color3.fromRGB(226, 212, 255),
+        TextDim = Color3.fromRGB(180, 164, 220), TextFaint = Color3.fromRGB(136, 120, 176),
+        TextOnAccent = Color3.fromRGB(20, 4, 32),
+    },
+    Sakura = {
+        DisplayName = "樱花 Sakura",
+        Accent = Color3.fromRGB(232, 106, 148),
+        MainBg = Color3.fromRGB(253, 248, 250), TopBar = Color3.fromRGB(255, 255, 255),
+        TabBg = Color3.fromRGB(250, 241, 245),  Section = Color3.fromRGB(255, 255, 255),
+        Control = Color3.fromRGB(252, 245, 248), ControlHover = Color3.fromRGB(247, 233, 239),
+        ControlAlt = Color3.fromRGB(241, 222, 231), ControlHover2 = Color3.fromRGB(232, 208, 220),
+        Text = Color3.fromRGB(78, 40, 58),      TextBright = Color3.fromRGB(94, 50, 70),
+        TextDim = Color3.fromRGB(146, 104, 124), TextFaint = Color3.fromRGB(172, 138, 154),
+        TextOnAccent = Color3.fromRGB(255, 255, 255),
+    },
 }
-local ThemeOrder = {"Cyan", "Gold", "Violet", "Frost"}
+local ThemeOrder = {"Cyan", "Gold", "Violet", "Frost", "Mono", "Cyber", "Sakura"}
+
+-- ═══════════════════════════════════════════════════════════════════
+--      VISUAL STYLE (v3.4) — 与配色解耦的「形状/质感」风格层
+--      Radius    : 基准圆角（8 = 库内默认档）
+--      FullRound : 原本全圆（开关滑块 / 圆形按钮）是否保持圆形
+--      Stroke*   : 细描边统一强度
+--      WindowAlpha: 额外窗口底色透明度（玻璃感）
+-- ═══════════════════════════════════════════════════════════════════
+local Styles = {
+    Sharp = {
+        DisplayName = "锐利 Sharp", Radius = 0, FullRound = false,
+        Stroke = 1, StrokeTransparency = 0.70, WindowAlpha = 0,
+        Desc = "方角 · 硬边 · 默认",
+    },
+    Soft = {
+        DisplayName = "柔和 Soft", Radius = 8, FullRound = true,
+        Stroke = 1, StrokeTransparency = 0.62, WindowAlpha = 0,
+        Desc = "8px 圆角 · 温和",
+    },
+    Round = {
+        DisplayName = "圆润 Round", Radius = 18, FullRound = true,
+        Stroke = 1, StrokeTransparency = 0.55, WindowAlpha = 0,
+        Desc = "18px 大圆角 · 胶囊",
+    },
+    Glass = {
+        DisplayName = "玻璃 Glass", Radius = 12, FullRound = true,
+        Stroke = 1, StrokeTransparency = 0.35, WindowAlpha = 0.10,
+        Desc = "半透明 · 高亮描边",
+    },
+}
+local StyleOrder = {"Sharp", "Soft", "Round", "Glass"}
 
 -- 布局（v3.3.0）：6 种排版结构，可在 Settings 中实时切换
 local LayoutDisplay = {
@@ -100,6 +171,15 @@ QuantumUI.Themes = Themes
 QuantumUI.ThemeOrder = ThemeOrder
 QuantumUI.LayoutDisplay = LayoutDisplay
 QuantumUI.LayoutOrder = LayoutOrder
+QuantumUI.Styles = Styles
+QuantumUI.StyleOrder = StyleOrder
+QuantumUI.CornerState = CornerState
+QuantumUI.StyleDisplay = setmetatable({}, {
+    __index = function(_, k)
+        local s = Styles[k]
+        return s and s.DisplayName or nil
+    end,
+})
 
 -- Color3 无法直接作 table key（每次构造都是新 userdata），转字符串键
 local function CKey(c)
@@ -401,10 +481,31 @@ local Sounds = {
 }
 
 -- ═══════════════════════════════════════════════════════════════
---               SQUARE-CORNER (NO UICorner) MODE
---   Set USE_SQUARE_CORNERS = true to strip ALL rounded corners.
+--          VISUAL STYLE ENGINE (v3.4) — 圆角/质感运行时可切换
+--   旧版 USE_SQUARE_CORNERS 是编译期常量，只能方角；
+--   v3.4 起 UICorner 一律真实创建（方角 = CornerRadius 0），
+--   原始意图记在属性里，切换风格时遍历全树实时重算，无需重建 UI。
 -- ═══════════════════════════════════════════════════════════════
-local USE_SQUARE_CORNERS = true
+local CornerState = {
+    Radius    = 0,      -- 基准圆角像素（以库内常见的 8px 为 1.0 倍）
+    Scale     = 0,      -- Radius / 8
+    FullRound = false,  -- 原本是 UDim.new(1,0) 的元素是否保持全圆
+}
+
+local MAX_RADIUS = 28
+
+local function resolveCorner(inst)
+    if CornerState.Radius <= 0 then return UDim.new(0, 0) end
+    if CornerState.FullRound and inst:GetAttribute("QFullRound") then
+        return UDim.new(1, 0)
+    end
+    local base = inst:GetAttribute("QBaseRadius") or 0
+    if base <= 0 then base = 8 end
+    local px = math.floor(base * CornerState.Scale + 0.5)
+    if px < 1 then px = 1 end
+    if px > MAX_RADIUS then px = MAX_RADIUS end
+    return UDim.new(0, px)
+end
 
 -- ═══════════════════════════════════════════════════════════════════
 --                          UTILITY
@@ -413,17 +514,23 @@ local USE_SQUARE_CORNERS = true
 local Utility = {}
 
 function Utility.Create(className, properties, children)
-    if className == "UICorner" and USE_SQUARE_CORNERS then
-        local proxy = {Parent = nil, Destroy = function() end, IsA = function() return false end}
-        local mt = {}
-        mt.__newindex = function() end
-        mt.__index = function() return nil end
-        setmetatable(proxy, mt)
-        function proxy:GetPropertyChangedSignal()
-            local e = {Connect = function() return {Disconnect = function() end} end}
-            return e
+    if className == "UICorner" then
+        -- 真实实例：记录原始意图 → 按当前风格解析实际圆角
+        local inst = Instance.new("UICorner")
+        local want = (properties and properties.CornerRadius) or UDim.new(0, 8)
+        local full = (want.Scale >= 1) or (want.Offset >= 999)
+        inst:SetAttribute("QFullRound", full)
+        inst:SetAttribute("QBaseRadius", math.floor(want.Offset + 0.5))
+        inst.CornerRadius = resolveCorner(inst)
+        for prop, value in pairs(properties or {}) do
+            if prop ~= "Parent" and prop ~= "CornerRadius" then
+                pcall(function() inst[prop] = value end)
+            end
         end
-        return proxy
+        if properties and properties.Parent then
+            pcall(function() inst.Parent = properties.Parent end)
+        end
+        return inst
     end
     local instance = Instance.new(className)
     for prop, value in pairs(properties or {}) do
@@ -743,6 +850,7 @@ function QuantumUI.new(options)
     self.NotifyHistory = {}
     self.CurrentLayout = options.Layout or "Default"
     self.ThemeName = options.Theme or "Cyan"
+    self.StyleName = options.Style or "Sharp"   -- v3.4 视觉风格
 
     QuantumUI.ThemeColor = self.ThemeColor
     QuantumUI.Transparency = self.Transparency
@@ -759,8 +867,13 @@ function QuantumUI.new(options)
         if type(prefs) == "table" then
             if prefs.Layout and LayoutDisplay[prefs.Layout] then self.CurrentLayout = prefs.Layout end
             if prefs.Theme and Themes[prefs.Theme] then self.ThemeName = prefs.Theme end
+            if prefs.Style and Styles[prefs.Style] then self.StyleName = prefs.Style end
         end
     end)
+    self.ActiveStyle = Styles[self.StyleName] or Styles.Sharp
+    CornerState.Radius    = self.ActiveStyle.Radius
+    CornerState.Scale     = self.ActiveStyle.Radius / 8
+    CornerState.FullRound = self.ActiveStyle.FullRound
     self.ActiveTheme = Themes[self.ThemeName] or Themes.Cyan
     if self.ActiveTheme then
         self.ThemeColor = self.ActiveTheme.Accent
@@ -1895,64 +2008,107 @@ end
 -- ─────────────────────────────────────────────
 -- 布局 6: Vape 风格（方角扁平 + 顶栏文字Tab + 下划线指示）
 -- ─────────────────────────────────────────────
+-- v3.4 重做：紧凑顶栏 + 下划线页签 + 底部状态栏（VapeV4 观感）
+local function vapeClock()
+    local ok, s = pcall(function() return DateTime.now():FormatLocalTime("HH:mm:ss", "en-us") end)
+    if ok and s then return s end
+    local ok2, s2 = pcall(function() return os.date("%H:%M:%S") end)
+    return (ok2 and s2) or ""
+end
+
 function QuantumUI:BuildLayout_Vape()
     self.TabStyle = "VapeTabs"
     self.TabListHorizontal = true
-    self.CornerRadius = 0      -- 方角
+    self.CornerRadius = 0      -- 布局基准方角（风格层可覆盖为圆角）
     self.FlatBorder = true     -- 纯色描边（无彩虹渐变）
     self:CreateWindowShell()
 
-    -- 标题行（扁平无圆角）
+    local TOP_H, TAB_H, BAR_H = 30, 30, 20
+
+    -- ── 顶栏 ────────────────────────────────────────────────
     local topBar = Utility.Create("Frame", {
         Name = "TopBar",
         Parent = self.MainFrame,
         BackgroundColor3 = Color3.fromRGB(20, 20, 35),
-        BackgroundTransparency = 0.15,
+        BackgroundTransparency = 0.12,
         BorderSizePixel = 0,
-        Size = UDim2.new(1, 0, 0, 38),
+        Size = UDim2.new(1, 0, 0, TOP_H),
         ZIndex = 10
     })
-    Utility.Create("TextLabel", {
+    -- accent 标识条
+    local mark = Utility.Create("Frame", {
         Parent = topBar,
-        BackgroundTransparency = 1,
-        Size = UDim2.new(0, 26, 1, 0),
-        Position = UDim2.new(0, 12, 0, 0),
-        Font = Enum.Font.GothamBold,
-        Text = "Q",
-        TextColor3 = self.ThemeColor,
-        TextSize = 19,
+        BackgroundColor3 = self.ThemeColor,
+        BorderSizePixel = 0,
+        Size = UDim2.new(0, 3, 0, 14),
+        Position = UDim2.new(0, 11, 0.5, 0),
+        AnchorPoint = Vector2.new(0, 0.5),
         ZIndex = 11
     })
+    self:AddThemeElement(mark, "BackgroundColor3")
+    -- 标题
     Utility.Create("TextLabel", {
         Parent = topBar,
         BackgroundTransparency = 1,
-        Size = UDim2.new(0, 260, 0, 16),
-        Position = UDim2.new(0, 42, 0.5, 0),
-        AnchorPoint = Vector2.new(0, 0.5),
+        Size = UDim2.new(1, -420, 1, 0),
+        Position = UDim2.new(0, 20, 0, 0),
         Font = Enum.Font.GothamBold,
         Text = self.Title,
         TextColor3 = Color3.fromRGB(255, 255, 255),
-        TextSize = 14,
+        TextSize = 13,
         TextXAlignment = Enum.TextXAlignment.Left,
         TextTruncate = Enum.TextTruncate.AtEnd,
         ZIndex = 11
     })
-    local minimizeBtn, maximizeBtn, closeBtn = self:CreateControlCluster(topBar, 6)
+    -- 副标题
+    Utility.Create("TextLabel", {
+        Parent = topBar,
+        BackgroundTransparency = 1,
+        Size = UDim2.new(0, 140, 1, 0),
+        Position = UDim2.new(1, -248, 0, 0),
+        Font = Enum.Font.Gotham,
+        Text = self.Subtitle or "",
+        TextColor3 = Color3.fromRGB(150, 150, 150),
+        TextSize = 11,
+        TextXAlignment = Enum.TextXAlignment.Right,
+        TextTruncate = Enum.TextTruncate.AtEnd,
+        ZIndex = 11
+    })
+    local minimizeBtn, maximizeBtn, closeBtn = self:CreateControlCluster(topBar, 3)
     self.TopBar = topBar
 
-    -- Tab 行（横向文字 Tab + 底部分隔线）
+    Utility.Create("Frame", {
+        Parent = self.MainFrame,
+        BackgroundColor3 = Color3.fromRGB(50, 50, 65),
+        BorderSizePixel = 0,
+        Size = UDim2.new(1, 0, 0, 1),
+        Position = UDim2.new(0, 0, 0, TOP_H),
+        ZIndex = 9
+    })
+
+    -- ── 页签行 ──────────────────────────────────────────────
+    local tabRowY = TOP_H + 1
+    Utility.Create("Frame", {
+        Parent = self.MainFrame,
+        BackgroundColor3 = Color3.fromRGB(18, 18, 30),
+        BackgroundTransparency = 0.35,
+        BorderSizePixel = 0,
+        Size = UDim2.new(1, 0, 0, TAB_H),
+        Position = UDim2.new(0, 0, 0, tabRowY),
+        ZIndex = 6
+    })
     self.TabList = Utility.Create("ScrollingFrame", {
         Name = "TabList",
         Parent = self.MainFrame,
         BackgroundTransparency = 1,
         BorderSizePixel = 0,
-        Size = UDim2.new(1, -16, 0, 30),
-        Position = UDim2.new(0, 8, 0, 40),
+        Size = UDim2.new(1, -16, 0, TAB_H - 2),
+        Position = UDim2.new(0, 8, 0, tabRowY + 1),
         CanvasSize = UDim2.new(0, 0, 0, 0),
         ScrollBarThickness = 2,
         ScrollBarImageColor3 = self.ThemeColor,
         ScrollingDirection = Enum.ScrollingDirection.X,
-        ZIndex = 6
+        ZIndex = 7
     }, {
         Utility.Create("UIListLayout", {
             SortOrder = Enum.SortOrder.LayoutOrder,
@@ -1973,20 +2129,86 @@ function QuantumUI:BuildLayout_Vape()
         BackgroundColor3 = Color3.fromRGB(50, 50, 65),
         BorderSizePixel = 0,
         Size = UDim2.new(1, 0, 0, 1),
-        Position = UDim2.new(0, 0, 0, 72),
-        ZIndex = 7
+        Position = UDim2.new(0, 0, 0, tabRowY + TAB_H),
+        ZIndex = 9
     })
 
-    -- 内容区（方角）
+    -- ── 内容区 ──────────────────────────────────────────────
+    local contentY = tabRowY + TAB_H + 1
     self.ContentContainer = Utility.Create("Frame", {
         Name = "ContentContainer",
         Parent = self.MainFrame,
         BackgroundTransparency = 1,
         BorderSizePixel = 0,
-        Size = UDim2.new(1, 0, 1, -76),
-        Position = UDim2.new(0, 0, 0, 74),
+        Size = UDim2.new(1, 0, 1, -(contentY + BAR_H)),
+        Position = UDim2.new(0, 0, 0, contentY),
         ZIndex = 5
     })
+
+    -- ── 底部状态栏 ──────────────────────────────────────────
+    Utility.Create("Frame", {
+        Parent = self.MainFrame,
+        BackgroundColor3 = Color3.fromRGB(50, 50, 65),
+        BorderSizePixel = 0,
+        Size = UDim2.new(1, 0, 0, 1),
+        Position = UDim2.new(0, 0, 1, -BAR_H),
+        ZIndex = 9
+    })
+    local statusBar = Utility.Create("Frame", {
+        Name = "StatusBar",
+        Parent = self.MainFrame,
+        BackgroundColor3 = Color3.fromRGB(18, 18, 30),
+        BackgroundTransparency = 0.4,
+        BorderSizePixel = 0,
+        Size = UDim2.new(1, 0, 0, BAR_H),
+        Position = UDim2.new(0, 0, 1, -BAR_H),
+        ZIndex = 10
+    })
+    local leftInfo = Utility.Create("TextLabel", {
+        Parent = statusBar,
+        BackgroundTransparency = 1,
+        Size = UDim2.new(0.6, -20, 1, 0),
+        Position = UDim2.new(0, 12, 0, 0),
+        Font = Enum.Font.Gotham,
+        Text = "",
+        TextColor3 = Color3.fromRGB(150, 150, 150),
+        TextSize = 11,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        TextTruncate = Enum.TextTruncate.AtEnd,
+        ZIndex = 11
+    })
+    local clockLabel = Utility.Create("TextLabel", {
+        Parent = statusBar,
+        BackgroundTransparency = 1,
+        Size = UDim2.new(0.4, -20, 1, 0),
+        Position = UDim2.new(0.6, 8, 0, 0),
+        Font = Enum.Font.Gotham,
+        Text = vapeClock(),
+        TextColor3 = Color3.fromRGB(150, 150, 150),
+        TextSize = 11,
+        TextXAlignment = Enum.TextXAlignment.Right,
+        ZIndex = 11
+    })
+    self.StatusBar = statusBar
+    self.StatusText = leftInfo
+    self.StatusClock = clockLabel
+
+    local function refreshStatus()
+        local n = 0
+        for _, t in ipairs(self.Tabs) do
+            if t.Page and t.Page.Parent then n = n + 1 end
+        end
+        leftInfo.Text = string.format("%d 个页签  ·  Quantum UI v%s", n, tostring(QuantumUI.Version))
+        clockLabel.Text = vapeClock()
+    end
+    refreshStatus()
+    task.spawn(function()
+        while self.StatusBar == statusBar do
+            task.wait(1)
+            if self.StatusBar ~= statusBar then break end
+            refreshStatus()
+        end
+    end)
 
     self:FinishWindow(minimizeBtn, maximizeBtn, closeBtn)
 end
@@ -1997,7 +2219,11 @@ end
 
 -- 布局/主题偏好持久化
 function QuantumUI:_SaveLayoutPrefs()
-    ConfigSystem.SaveUI("LayoutPrefs", {Layout = self.CurrentLayout, Theme = self.ThemeName})
+    ConfigSystem.SaveUI("LayoutPrefs", {
+        Layout = self.CurrentLayout,
+        Theme  = self.ThemeName,
+        Style  = self.StyleName,
+    })
 end
 
 -- 布局自然尺寸（Default 尊重用户传入的 Size）
@@ -2056,6 +2282,9 @@ function QuantumUI:_TeardownLayout()
     self.TabContainer = nil
     self.TabStyle = nil
     self.TabListHorizontal = nil
+    self.StatusBar = nil          -- v3.4: Vape 状态栏（循环刷新靠它判定退出）
+    self.StatusText = nil
+    self.StatusClock = nil
     self:RefreshTheme()  -- 顺带清理已销毁的 ThemeElements
 end
 
@@ -2204,6 +2433,63 @@ function QuantumUI:SwitchTheme(themeName)
     end
     self:_SaveLayoutPrefs()
     self:Notify({Title = "主题已切换", Content = self.ActiveTheme.DisplayName, Duration = 2, Type = "Info"})
+end
+
+-- ═══════════════════════════════════════════════════════════════════
+--  v3.4 视觉风格 Style：圆角 / 描边 / 玻璃质感
+--  与配色主题解耦：主题管颜色，风格管形状，两者可任意组合
+-- ═══════════════════════════════════════════════════════════════════
+
+-- 遍历整棵树重算 UICorner / 细描边（不重建 UI，控件状态与回调无损）
+function QuantumUI:ApplyStyleToTree(root)
+    if not root then return end
+    local st = self.ActiveStyle
+    if not st then return end
+    local function visit(inst)
+        if inst:GetAttribute("StyleExempt") then return end
+        if inst:IsA("UICorner") then
+            inst.CornerRadius = resolveCorner(inst)
+        elseif inst:IsA("UIStroke") then
+            -- 只接管「细描边」；窗口主边框（Thickness >= 2）保持原样
+            if inst.Thickness <= 1.5 then
+                pcall(function()
+                    inst.Thickness = st.Stroke
+                    inst.Transparency = st.StrokeTransparency
+                end)
+            end
+        end
+        for _, ch in ipairs(inst:GetChildren()) do visit(ch) end
+    end
+    pcall(visit, root)
+end
+
+function QuantumUI:SwitchStyle(styleName)
+    if not Styles[styleName] then return end
+    if styleName == self.StyleName and self.ActiveStyle then return end
+    self.StyleName = styleName
+    self.ActiveStyle = Styles[styleName]
+    CornerState.Radius    = self.ActiveStyle.Radius
+    CornerState.Scale     = self.ActiveStyle.Radius / 8
+    CornerState.FullRound = self.ActiveStyle.FullRound
+
+    self:ApplyStyleToTree(self.MainFrame)
+    for _, t in ipairs(self.Tabs) do
+        if t.Panel then self:ApplyStyleToTree(t.Panel) end
+    end
+    -- 玻璃模式：整体再透一点
+    if self.MainFrame then
+        local base = self.Transparency or 0.3
+        Utility.Tween(self.MainFrame, {
+            BackgroundTransparency = math.clamp(base + (self.ActiveStyle.WindowAlpha or 0), 0, 0.95)
+        }, 0.3)
+    end
+    self:_SaveLayoutPrefs()
+    self:Notify({
+        Title = "风格已切换",
+        Content = self.ActiveStyle.DisplayName .. (self.ActiveStyle.Desc and (" · " .. self.ActiveStyle.Desc) or ""),
+        Duration = 2,
+        Type = "Info",
+    })
 end
 
 -- NEW: Set custom background
@@ -2892,25 +3178,28 @@ function QuantumUI:CreateTabButton(tab, opts)
         end)
 
     elseif style == "VapeTabs" then
-        -- Vape 风格：透明底、方角、底部下划线指示
+        -- Vape 风格（v3.4 重做）：扁平页签、选中淡底 + 底部 accent 下划线
+        tab._IdleTransparency = 1      -- 未选中：完全透明
+        tab._ActiveTransparency = 0.82 -- 选中：极淡底
+        tab._HoverTransparency = 0.9   -- 悬停：介于两者之间
         btn = Utility.Create("TextButton", {
             Parent = self.TabList,
-            BackgroundColor3 = Color3.fromRGB(30, 30, 45),
+            BackgroundColor3 = Color3.fromRGB(40, 40, 55),
             BackgroundTransparency = 1,
             BorderSizePixel = 0,
-            Size = UDim2.new(0, btnW - 8, 1, 0),
+            Size = UDim2.new(0, math.max(52, btnW - 6), 1, -2),
             Text = "",
             ZIndex = 7
-        })
+        }, {Utility.Create("UICorner", {CornerRadius = UDim.new(0, 4)})})
         textLabel = Utility.Create("TextLabel", {
             Parent = btn,
             BackgroundTransparency = 1,
-            Size = UDim2.new(1, -10, 1, -2),
-            Position = UDim2.new(0, 5, 0, 0),
+            Size = UDim2.new(1, -12, 1, 0),
+            Position = UDim2.new(0, 6, 0, 0),
             Font = Enum.Font.GothamMedium,
             Text = tabName,
-            TextColor3 = Color3.fromRGB(200, 200, 200),
-            TextSize = 13,
+            TextColor3 = Color3.fromRGB(150, 150, 150),
+            TextSize = 12,
             TextTruncate = Enum.TextTruncate.AtEnd,
             ZIndex = 8
         })
@@ -2918,18 +3207,22 @@ function QuantumUI:CreateTabButton(tab, opts)
             Parent = btn,
             BackgroundColor3 = self.ThemeColor,
             BorderSizePixel = 0,
-            Size = UDim2.new(1, 0, 0, 2),
-            Position = UDim2.new(0, 0, 1, -2),
+            Size = UDim2.new(1, -12, 0, 2),
+            Position = UDim2.new(0, 6, 1, -1),
             Visible = false,
-            ZIndex = 8
+            ZIndex = 9
         })
         btn.MouseEnter:Connect(function()
             Utility.PlaySound(Sounds.Hover, 0.1)
-            Utility.Tween(btn, {BackgroundTransparency = 0.6}, 0.15)
+            if self.SelectedTab ~= tab then
+                Utility.Tween(btn, {BackgroundTransparency = tab._HoverTransparency}, 0.15)
+                Utility.Tween(textLabel, {TextColor3 = Color3.fromRGB(220, 220, 220)}, 0.15)
+            end
         end)
         btn.MouseLeave:Connect(function()
             if self.SelectedTab ~= tab then
-                Utility.Tween(btn, {BackgroundTransparency = 1}, 0.15)
+                Utility.Tween(btn, {BackgroundTransparency = tab._IdleTransparency}, 0.15)
+                Utility.Tween(textLabel, {TextColor3 = Color3.fromRGB(150, 150, 150)}, 0.15)
             end
         end)
 
@@ -3029,7 +3322,8 @@ function QuantumUI:SelectTab(tab)
         t.Page.Visible = false
         if t.PageHolder then t.PageHolder.Visible = false end
         if t.Indicator then t.Indicator.Visible = false end
-        Utility.Tween(t.Button, {BackgroundTransparency = 0.5}, 0.2)
+        -- v3.4: 各 Tab 风格可自定义常态/选中透明度（Vape 扁平页签靠这个）
+        Utility.Tween(t.Button, {BackgroundTransparency = t._IdleTransparency or 0.5}, 0.2)
         if t.Icon then
             Utility.Tween(t.Icon, {ImageColor3 = Color3.fromRGB(200, 200, 200)}, 0.2)
         end
@@ -3041,7 +3335,7 @@ function QuantumUI:SelectTab(tab)
     if tab.PageHolder then tab.PageHolder.Visible = true end
     if tab.Indicator then tab.Indicator.Visible = true end
     self.SelectedTab = tab
-    Utility.Tween(tab.Button, {BackgroundTransparency = 0.2}, 0.2)
+    Utility.Tween(tab.Button, {BackgroundTransparency = tab._ActiveTransparency or 0.2}, 0.2)
     if tab.Icon then
         Utility.Tween(tab.Icon, {ImageColor3 = self.ThemeColor}, 0.2)
     end
@@ -5351,6 +5645,28 @@ function QuantumUI:CreateSettingsTab()
         end
     })
 
+    -- v3.4: 视觉风格 Style（形状/质感，与配色解耦）
+    local styleItems = {}
+    for _, k in ipairs(StyleOrder) do table.insert(styleItems, Styles[k].DisplayName) end
+
+    settingsTab:AddDropdown({
+        Name = "视觉风格 Style",
+        Items = styleItems,
+        Default = (self.ActiveStyle and self.ActiveStyle.DisplayName) or styleItems[1],
+        Callback = function(selected)
+            for k, s in pairs(Styles) do
+                if s.DisplayName == selected then
+                    self:SwitchStyle(k)
+                    break
+                end
+            end
+        end
+    })
+
+    settingsTab:AddLabel({
+        Text = "风格只改形状与质感，可与任意配色主题自由组合。"
+    })
+
     -- ═══════════════════════════════════════
     -- UI SETTINGS SECTION
     -- ═══════════════════════════════════════
@@ -6017,6 +6333,10 @@ QuantumUI.Internals = {
     Themes       = Themes,
     ThemeOrder   = ThemeOrder,
     LayoutOrder  = LayoutOrder,
+    Styles       = Styles,
+    StyleOrder   = StyleOrder,
+    CornerState  = CornerState,
+    resolveCorner = resolveCorner,
     Mouse        = Mouse,
     LocalPlayer  = LocalPlayer,
     IsMobile     = IsMobile,
