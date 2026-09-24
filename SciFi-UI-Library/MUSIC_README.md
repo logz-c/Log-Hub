@@ -240,3 +240,77 @@ Queue Note Close Plus Trash Up Down`。
 
 完整 Asset ID 清单与「改形状 → 重新上传」的流程见  
 [`../ui_assets/icons/README.md`](../ui_assets/icons/README.md)。
+
+---
+
+## 五、引擎绑定 —— 让音乐窗口真的能播歌（v1.1）
+
+`music.lua` 本身**对音频后端零依赖**：控件只发回调。要真正出声，把任意实现下面这组
+「标准后端接口」的对象接进来即可。
+
+### 标准后端接口
+
+| 方法 | 说明 |
+|---|---|
+| `Search(kw, limit) -> items[]` | items: `{Id, Title, Sub, Duration, Cover, Fav}` |
+| `Play(item)` / `Toggle()` / `Next()` / `Prev()` | 播放控制 |
+| `Seek(sec)` / `SetVolume(v)` | 进度与音量 |
+| `SetQueue(items, index)` | 设置播放队列 |
+| `GetState() -> {playing,pos,len,volume,index,count,status,song}` | 供 UI 轮询 |
+| `Lyric() -> {{t=秒,text=…}}` | 歌词行（可空） |
+| `Liked(force)` / `ToggleFav(item)` / `Login()` | 红心与登录态（可选） |
+
+### 网易云：三行接入
+
+```lua
+local BASE = "https://raw.githubusercontent.com/logz-c/Log-Hub/main/SciFi-UI-Library/"
+
+-- 1) 引擎（Headless：只跑引擎，不建它自己的 UI）
+getgenv().NCM_OPTIONS = { Headless = true }
+loadstring(game:HttpGet(BASE .. "netease-engine.lua"))()
+
+-- 2) UI 库
+local QuantumUI = loadstring(game:HttpGet(BASE .. "source.lua"))()
+local MusicUI   = loadstring(game:HttpGet(BASE .. "music.lua"))()(QuantumUI)
+
+-- 3) 建窗口 + 一键绑定
+local Win = QuantumUI.new({ Title = "My Hub" })
+local Tab = Win:AddMusicTab({ Name = "MUSIC", Title = "♪ 网易云音乐",
+                              WindowSize = UDim2.new(0, 400, 0, 620) })
+
+local Ctl = MusicUI.BindNetease(Tab, { AutoLiked = false, SearchLimit = 30 })
+Tab:OpenMusic()
+```
+
+`BindNetease` 会自动建好**播放卡片 / 搜索框 / 分类条 / 歌曲列表 / 红心列表 / 播放队列 /
+歌词面板**，并把它们全部接线，同时起一个轮询把引擎状态同步回 UI
+（播放态、进度、状态文案、歌词高亮、列表 `SetActive`）。
+
+### 返回的控制器
+
+```lua
+Ctl.search("周杰伦")            -- 手动搜索
+Ctl.playItem(item, list)        -- 播放某一项（list 作为队列）
+Ctl.loadLiked()                 -- 拉云端红心
+Ctl.setVolume(0.5)
+Ctl.destroy()                   -- 停掉轮询
+```
+
+### 换成别的后端
+
+```lua
+local myEngine = {                      -- 只要实现接口，来源随意（本地文件 / 别的 API）
+    Search = function(kw, n) return myItems end,
+    Play   = function(item) ... end,
+    Toggle = function() ... end,
+    GetState = function() return { playing = true, pos = 12, len = 200 } end,
+}
+MusicUI.BindEngine(Tab, myEngine, {})
+```
+
+### 说明
+
+- 引擎未加载时 `BindNetease` 返回 `nil, 原因`，不会报错。
+- 网易云引擎未登录时只有免费歌能播（搜索结果的 ~17%）；登录后 100%。
+  引擎启动会自动读 `NetMusicCfg/cookie.json` 恢复登录态。
+- 本地收藏（`FavToggle` / `FavHas`）与云端红心是两套，互不影响。
