@@ -46,7 +46,7 @@ local SoundService      = game:GetService("SoundService")
 local LocalPlayer = Players.LocalPlayer
 
 local MusicUI = {}
-MusicUI.Version = "1.3.0"
+MusicUI.Version = "1.4.0"
 
 -- ═══════════════════════════════════════════════════════════════════
 --  美术资源槽位
@@ -3502,6 +3502,770 @@ function MusicUI.CreateMiniBar(a, b)
     if cls and cls ~= Q then bindInternals(cls) end
     return buildMiniBar(host, opts)
 end
+-- ══════════════════════════════════════════════════════════════════
+--  右侧歌词浮层（v1.4）
+--    贴屏幕右侧竖排显示歌词，逐行高亮 + 自动滚动。
+--    两个关键开关：
+--      · Transparency —— 背景与文字的整体透明度
+--      · BlockInput   —— 关（默认）= 全部元素 Active=false，鼠标事件穿透，
+--                        完全不挡操作；开 = 可拖动、可点歌词行跳转
+-- ══════════════════════════════════════════════════════════════════
+
+local function buildLyricsOverlay(host, opts)
+    opts = opts or {}
+    local accent = themeColor(Q, "Accent")
+    local vp = (workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize) or Vector2.new(1280, 720)
+    local W = opts.Width or 320
+    local H = math.min(opts.Height or math.floor(vp.Y * 0.6), vp.Y - 120)
+    local side = opts.Side or "Right"
+    local xPos = (side == "Left") and UDim2.new(0, 12, 0.5, 0)
+                              or UDim2.new(1, -W - 12, 0.5, 0)
+
+    local self = {
+        alive = true, lines = {}, index = nil,
+        transparency = opts.Transparency or 0.35,
+        blockInput = opts.BlockInput == true,
+        fadeIdle = opts.FadeIdle ~= false,
+        idleAlpha = opts.IdleAlpha or 0.75,
+        fadeDelay = opts.FadeDelay or 6,
+        _activeUntil = os.clock() + (opts.FadeDelay or 6),
+    }
+
+    local root = Util.Create("Frame", {
+        Parent = host, Name = "LyricsOverlay",
+        BackgroundColor3 = themeColor(Q, "MainBg"),
+        BackgroundTransparency = 1,
+        BorderSizePixel = 0,
+        Size = UDim2.new(0, W, 0, H),
+        Position = xPos,
+        AnchorPoint = Vector2.new(0, 0.5),
+        Active = false, ClipsDescendants = false, ZIndex = 30,
+    }, { Util.Create("UICorner", { CornerRadius = UDim.new(0, 12) }) })
+    self.frame = root
+    local bg = Util.Create("Frame", {
+        Parent = root, BackgroundColor3 = themeColor(Q, "MainBg"),
+        BackgroundTransparency = 1, BorderSizePixel = 0,
+        Size = UDim2.new(1, 0, 1, 0), ZIndex = 30, Active = false,
+    }, { Util.Create("UICorner", { CornerRadius = UDim.new(0, 12) }) })
+    self.bg = bg
+    local stroke = Util.Create("UIStroke", {
+        Parent = bg, Color = accent, Thickness = 1, Transparency = 0.75,
+    })
+    self.stroke = stroke
+
+    local scroll = Util.Create("ScrollingFrame", {
+        Parent = root, BackgroundTransparency = 1, BorderSizePixel = 0,
+        Size = UDim2.new(1, -16, 1, -16), Position = UDim2.new(0, 8, 0, 8),
+        CanvasSize = UDim2.new(0, 0, 0, 0), ScrollBarThickness = 0,
+        ScrollingEnabled = opts.Scrollable ~= false, ZIndex = 31, Active = false,
+        AutomaticCanvasSize = Enum.AutomaticSize.None,
+    }, {
+        Util.Create("UIListLayout", {
+            SortOrder = Enum.SortOrder.LayoutOrder,
+            HorizontalAlignment = Enum.HorizontalAlignment.Center,
+            Padding = UDim.new(0, 10),
+        }),
+        Util.Create("UIPadding", { PaddingTop = UDim.new(0, 10), PaddingBottom = UDim.new(0, 40) }),
+    })
+    self.scroll = scroll
+    local layout = scroll:FindFirstChildOfClass("UIListLayout")
+    if layout then
+        layout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+            scroll.CanvasSize = UDim2.new(0, 0, 0, layout.AbsoluteContentSize.Y + 60)
+        end)
+    end
+
+    local empty = Util.Create("TextLabel", {
+        Parent = root, BackgroundTransparency = 1, BorderSizePixel = 0,
+        Size = UDim2.new(1, 0, 0, 30), Position = UDim2.new(0, 0, 0.5, -15),
+        Font = Enum.Font.Gotham, Text = opts.EmptyText or "暂无歌词",
+        TextColor3 = themeColor(Q, "TextFaint"), TextSize = 12, ZIndex = 32, Active = false,
+    })
+    self.empty = empty
+
+    -- ── 透明度 / 穿透 ───────────────────────────────────────────
+    local function applyAlpha()
+        local t = self.transparency
+        bg.BackgroundTransparency = math.clamp(t + 0.15, 0, 1)
+        stroke.Transparency = math.clamp(t + 0.5, 0, 1)
+        for _, lab in ipairs(self.labels or {}) do
+            local isCur = (lab.LayoutOrder == self.index)
+            lab.TextTransparency = isCur and math.clamp(t, 0, 1) or math.clamp(t + 0.18, 0, 1)
+        end
+        empty.TextTransparency = math.clamp(t + 0.15, 0, 1)
+    end
+    self._applyAlpha = applyAlpha
+
+    local function applyInput()
+        local blk = self.blockInput
+        root.Active = blk
+        bg.Active = false
+        scroll.Active = blk
+        scroll.ScrollingEnabled = blk and opts.Scrollable ~= false
+        empty.Active = false
+        for _, lab in ipairs(self.labels or {}) do
+            lab.Active = blk
+        end
+    end
+    self._applyInput = applyInput
+
+    -- ── 渲染歌词 ────────────────────────────────────────────────
+    function self:SetLines(lines)
+        self.lines = type(lines) == "table" and lines or {}
+        for _, lab in ipairs(self.labels or {}) do pcall(function() lab:Destroy() end) end
+        self.labels = {}
+        self.index = nil
+        empty.Visible = (#self.lines == 0)
+        for i, l in ipairs(self.lines) do
+            local lab = Util.Create("TextLabel", {
+                Parent = scroll, BackgroundTransparency = 1, BorderSizePixel = 0,
+                Size = UDim2.new(1, -8, 0, 20), LayoutOrder = i,
+                Font = Enum.Font.GothamMedium, Text = l.text or "",
+                TextColor3 = themeColor(Q, "TextBright"), TextSize = 13,
+                TextWrapped = true, TextYAlignment = Enum.TextYAlignment.Center,
+                ZIndex = 32, Active = false,
+            })
+            lab.MouseButton1Click:Connect(function()
+                if self.blockInput and self.engine then self.engine.Seek(l.t or 0) end
+            end)
+            self.labels[i] = lab
+        end
+        applyAlpha()
+        applyInput()
+    end
+
+    function self:Seek(pos)
+        if #self.labels == 0 then return end
+        local idx = nil
+        for i, l in ipairs(self.lines) do
+            if (l.t or 0) <= (pos or 0) then idx = i else break end
+        end
+        if idx == self.index then return end
+        self.index = idx
+        for i, lab in ipairs(self.labels) do
+            local isCur = (i == idx)
+            lab.Font = isCur and Enum.Font.GothamBold or Enum.Font.GothamMedium
+            lab.TextSize = isCur and 15 or 13
+            lab.TextColor3 = isCur and accent or themeColor(Q, "TextBright")
+            lab.TextTransparency = isCur and math.clamp(self.transparency, 0, 1)
+                                           or math.clamp(self.transparency + 0.18, 0, 1)
+        end
+        -- 自动把当前行滚到中间
+        if idx and self.labels[idx] and opts.AutoScroll ~= false then
+            local lab = self.labels[idx]
+            local target = lab.AbsolutePosition.Y - root.AbsolutePosition.Y
+                - (root.AbsoluteSize.Y / 2 - lab.AbsoluteSize.Y / 2)
+            Util.Tween(scroll, { CanvasPosition = Vector2.new(0, math.max(0, scroll.CanvasPosition.Y + target)) }, 0.35)
+        end
+    end
+
+    -- ── 对外方法 ────────────────────────────────────────────────
+    function self:SetTransparency(t)
+        self.transparency = math.clamp(t or 0, 0, 1)
+        applyAlpha()
+    end
+    function self:SetBlockInput(b)
+        self.blockInput = b == true
+        applyInput()
+    end
+    function self:IsBlockingInput() return self.blockInput end
+    function self:SetSide(s)
+        side = (s == "Left") and "Left" or "Right"
+        root.Position = (side == "Left") and UDim2.new(0, 12, 0.5, 0)
+                                            or UDim2.new(1, -W - 12, 0.5, 0)
+    end
+    function self:Show() root.Visible = true end
+    function self:Hide() root.Visible = false end
+    function self:Toggle() root.Visible = not root.Visible end
+    function self:IsVisible() return root.Visible end
+    function self:GetFrame() return root end
+    function self:Destroy() self.alive = false pcall(function() root:Destroy() end) end
+
+    -- 闲置淡出（只在开启 blockInput 时才有意义：不挡操作时本来就无感）
+    task.spawn(function()
+        while self.alive do
+            task.wait(0.5)
+            if self.fadeIdle and not self.blockInput then
+                if os.clock() > self._activeUntil and self.transparency < self.idleAlpha - 0.01 then
+                    self:SetTransparency(self.idleAlpha)
+                end
+            end
+        end
+    end)
+
+    -- 拖动（仅在 blockInput = true 时可拖）
+    local dragStart, startPos = nil, nil
+    root.InputBegan:Connect(function(i)
+        if not self.blockInput then return end
+        if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
+            dragStart = i.Position
+            startPos = Vector2.new(root.AbsolutePosition.X, root.AbsolutePosition.Y)
+        end
+    end)
+    UserInputService.InputChanged:Connect(function(i)
+        if not dragStart or not self.blockInput then return end
+        if i.UserInputType ~= Enum.UserInputType.MouseMovement and i.UserInputType ~= Enum.UserInputType.Touch then return end
+        local d = i.Position - dragStart
+        if math.abs(d.X) + math.abs(d.Y) < 6 then return end
+        root.AnchorPoint = Vector2.new(0, 0)
+        root.Position = UDim2.new(0, startPos.X + d.X, 0, startPos.Y + d.Y)
+    end)
+    UserInputService.InputEnded:Connect(function(i)
+        if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
+            dragStart = nil
+        end
+    end)
+
+    -- ── 接后端：自动跟随歌词 ────────────────────────────────────
+    function self:Bind(engine, bopts)
+        self.engine = engine
+        bopts = bopts or {}
+        task.spawn(function()
+            local lastId, lastIdx, miss = nil, nil, nil
+            while self.alive do
+                task.wait(bopts.PollInterval or 0.25)
+                local ok, st = pcall(function() return engine.GetState() end)
+                if ok and st then
+                    local song = st.song
+                    if song and song.id ~= lastId then
+                        lastId = song.id
+                        local lines = engine.Lyric and engine.Lyric() or nil
+                        self:SetLines(lines)
+                        miss = lines and nil or 0
+                        lastIdx = nil
+                    elseif song and #self.lines == 0 and (miss or 0) < 30 then
+                        miss = (miss or 0) + 1
+                        self:SetLines(engine.Lyric and engine.Lyric() or nil)
+                    end
+                    local _, idx = engine.LyricAt and engine.LyricAt(st.pos or 0)
+                    if idx and idx ~= lastIdx then
+                        lastIdx = idx
+                        self:Seek(st.pos or 0)
+                    end
+                end
+            end
+        end)
+        return self
+    end
+
+    function self:BindNetease(bopts)
+        local g = (getgenv and getgenv()) or _G
+        local ncm = g and g.NCM
+        if not ncm then return nil, "getgenv().NCM 不存在" end
+        local eng, err = MusicUI.neteaseEngine(ncm)
+        if not eng then return nil, err end
+        return self:Bind(eng, bopts)
+    end
+
+    self:SetTransparency(self.transparency)
+    self:SetBlockInput(self.blockInput)
+    root.Visible = (opts.Visible ~= false)
+    return self
+end
+
+-- 用法：MusicUI.CreateLyricsOverlay(QuantumUI, { Side="Right", Transparency=0.35,
+--                                              BlockInput=false })
+function MusicUI.CreateLyricsOverlay(a, b)
+    local cls, opts
+    if type(a) == "table" and (a.ScreenGui or a.MainFrame) then cls, opts = a, (b or {})
+    else cls, opts = Q, (a or {}) end
+    local host = opts.Parent or (cls and cls.ScreenGui)
+    if not host then return nil, "找不到宿主 ScreenGui" end
+    if cls and cls ~= Q then bindInternals(cls) end
+    return buildLyricsOverlay(host, opts)
+end
+
+-- ══════════════════════════════════════════════════════════════════
+--  中央调配菜单（v1.4）
+--    屏幕正中央展开的面板，左侧导航「界面 / 音乐」。
+--    界面页驱动 source.lua 的主题/风格/布局/边框/窗口透明度；
+--    音乐页管播放、音量、歌词浮层、迷你条。
+--    控件是轻量自绘：步进器(◀ 值 ▶) / 胶囊开关 / 细滑块 —— 与悬浮窗同款语言。
+-- ══════════════════════════════════════════════════════════════════
+
+local function cmRow(parent, order, h)
+    return Util.Create("Frame", {
+        Parent = parent, BackgroundTransparency = 1, BorderSizePixel = 0,
+        Size = UDim2.new(1, 0, 0, h or 34), LayoutOrder = order, Active = false,
+    })
+end
+
+local function cmLabel(parent, text, w)
+    return Util.Create("TextLabel", {
+        Parent = parent, BackgroundTransparency = 1, BorderSizePixel = 0,
+        Size = UDim2.new(0, w or 104, 1, 0), Position = UDim2.new(0, 0, 0, 0),
+        Font = Enum.Font.Gotham, Text = text,
+        TextColor3 = themeColor(Q, "TextDim"), TextSize = 12,
+        TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 62,
+    })
+end
+
+local function cmSection(parent, order, text)
+    local row = cmRow(parent, order, 26)
+    Util.Create("TextLabel", {
+        Parent = row, BackgroundTransparency = 1, BorderSizePixel = 0,
+        Size = UDim2.new(1, 0, 1, 0), Font = Enum.Font.GothamBold, Text = text,
+        TextColor3 = themeColor(Q, "TextFaint"), TextSize = 11,
+        TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 62,
+    })
+    Util.Create("Frame", {
+        Parent = row, BackgroundColor3 = Color3.fromRGB(255, 255, 255),
+        BackgroundTransparency = 0.9, BorderSizePixel = 0,
+        Size = UDim2.new(0, 0, 0, 1), Position = UDim2.new(0, 0, 1, -2), ZIndex = 62,
+    })
+    return row
+end
+
+-- 步进器：◀ 当前值 ▶
+local function cmStepper(parent, order, label, values, getIndex, onPick)
+    local row = cmRow(parent, order, 34)
+    cmLabel(row, label)
+    local accent = themeColor(Q, "Accent")
+    local val = Util.Create("TextLabel", {
+        Parent = row, BackgroundTransparency = 1, BorderSizePixel = 0,
+        Size = UDim2.new(0, 110, 1, 0), Position = UDim2.new(1, -128, 0, 0),
+        Font = Enum.Font.GothamMedium, Text = "",
+        TextColor3 = themeColor(Q, "TextBright"), TextSize = 12,
+        TextXAlignment = Enum.TextXAlignment.Center,
+        TextTruncate = Enum.TextTruncate.AtEnd, ZIndex = 62,
+    })
+    local btnR = mkIconButton(row, 22, -6, "Next", 11, true, 62)
+    local btnL = mkIconButton(row, 22, -140, "Prev", 11, true, 62)
+    local function sync()
+        local i = math.clamp(getIndex() or 1, 1, math.max(1, #values))
+        val.Text = values[i] or "—"
+    end
+    local function step(d)
+        local n = #values
+        if n == 0 then return end
+        local i = ((math.clamp(getIndex() or 1, 1, n) - 1 + d) % n) + 1
+        onPick(i, values[i])
+        sync()
+    end
+    btnL.MouseButton1Click:Connect(function() snd("Click", 0.1) step(-1) end)
+    btnR.MouseButton1Click:Connect(function() snd("Click", 0.1) step(1) end)
+    sync()
+    return { row = row, sync = sync, value = val, accent = accent }
+end
+
+-- 胶囊开关
+local function cmSwitch(parent, order, label, get, onSet)
+    local row = cmRow(parent, order, 34)
+    cmLabel(row, label)
+    local accent = themeColor(Q, "Accent")
+    local pill = Util.Create("TextButton", {
+        Parent = row, BackgroundColor3 = themeColor(Q, "ControlAlt"),
+        BackgroundTransparency = 0.1, BorderSizePixel = 0, Text = "",
+        Size = UDim2.new(0, 36, 0, 20), Position = UDim2.new(1, -6, 0.5, 0),
+        AnchorPoint = Vector2.new(1, 0.5), ZIndex = 62, AutoButtonColor = false,
+    }, { Util.Create("UICorner", { CornerRadius = UDim.new(1, 0) }) })
+    local knob = Util.Create("Frame", {
+        Parent = pill, BackgroundColor3 = Color3.fromRGB(255, 255, 255),
+        BorderSizePixel = 0, Size = UDim2.new(0, 16, 0, 16),
+        Position = UDim2.new(0, 2, 0.5, 0), AnchorPoint = Vector2.new(0, 0.5), ZIndex = 63,
+    }, { Util.Create("UICorner", { CornerRadius = UDim.new(1, 0) }) })
+    local on = false
+    local function paint()
+        pill.BackgroundColor3 = on and accent or themeColor(Q, "ControlAlt")
+        Util.Tween(knob, { Position = on and UDim2.new(1, -2, 0.5, 0) or UDim2.new(0, 2, 0.5, 0) }, 0.15)
+    end
+    local function sync() on = get() and true or false paint() end
+    pill.MouseButton1Click:Connect(function()
+        snd("Click", 0.1)
+        on = not on
+        paint()
+        onSet(on)
+    end)
+    sync()
+    return { row = row, sync = sync, set = function(v) on = v and true or false paint() end }
+end
+
+-- 细滑块 + 数值
+local function cmSlider(parent, order, label, minV, maxV, get, onSet, fmt)
+    local row = cmRow(parent, order, 34)
+    cmLabel(row, label)
+    local val = Util.Create("TextLabel", {
+        Parent = row, BackgroundTransparency = 1, BorderSizePixel = 0,
+        Size = UDim2.new(0, 54, 1, 0), Position = UDim2.new(1, -60, 0, 0),
+        Font = Enum.Font.Gotham, Text = "", TextColor3 = themeColor(Q, "TextBright"),
+        TextSize = 11, TextXAlignment = Enum.TextXAlignment.Right, ZIndex = 62,
+    })
+    local function ratio(v)
+        return math.clamp(((v or minV) - minV) / math.max(0.0001, maxV - minV), 0, 1)
+    end
+    local sl = mkSlider(row, {
+        Size = UDim2.new(1, -230, 0, 3),
+        Position = UDim2.new(0, 110, 0.5, 0),
+        ZIndex = 62, Ratio = ratio(get()),
+        OnChange = function(r)
+            local v = minV + (maxV - minV) * r
+            val.Text = fmt and fmt(v) or string.format("%.2f", v)
+            onSet(v)
+        end,
+    })
+    local function sync()
+        local v = get()
+        sl:SetRatio(ratio(v))
+        val.Text = fmt and fmt(v) or string.format("%.2f", v or 0)
+    end
+    sync()
+    return { row = row, sync = sync }
+end
+
+-- ── 主构建 ──────────────────────────────────────────────────────
+local function buildControlMenu(host, cls, opts)
+    opts = opts or {}
+    local accent = themeColor(Q, "Accent")
+    local vp = (workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize) or Vector2.new(1280, 720)
+    local W = math.min(opts.Width or 560, math.floor(vp.X * 0.94))
+    local H = math.min(opts.Height or 400, math.floor(vp.Y * 0.86))
+
+    local self = { alive = true, open = false, page = "界面", refs = {} }
+
+    local backdrop = Util.Create("TextButton", {
+        Parent = host, Name = "ControlMenuBackdrop", Text = "",
+        BackgroundColor3 = Color3.fromRGB(0, 0, 0), BackgroundTransparency = 1,
+        BorderSizePixel = 0, Size = UDim2.new(1, 0, 1, 0),
+        ZIndex = 70, Visible = false, AutoButtonColor = false,
+    })
+    self.backdrop = backdrop
+
+    local root = Util.Create("Frame", {
+        Parent = host, Name = "ControlMenu",
+        BackgroundColor3 = themeColor(Q, "MainBg"),
+        BackgroundTransparency = 0.08, BorderSizePixel = 0,
+        Size = UDim2.new(0, W, 0, H),
+        Position = UDim2.new(0.5, -W / 2, 0.5, -H / 2),
+        Active = true, ZIndex = 72, Visible = false,
+    }, {
+        Util.Create("UICorner", { CornerRadius = UDim.new(0, 12) }),
+        Util.Create("UIScale", { Scale = 1 }),
+    })
+    self.frame = root
+    local scale = root:FindFirstChildOfClass("UIScale")
+    self.scale = scale
+    Util.Create("UIStroke", {
+        Parent = root, Color = accent, Thickness = 1, Transparency = 0.5,
+    })
+
+    -- 标题
+    Util.Create("TextLabel", {
+        Parent = root, BackgroundTransparency = 1, BorderSizePixel = 0,
+        Size = UDim2.new(1, -80, 0, 18), Position = UDim2.new(0, 16, 0, 12),
+        Font = Enum.Font.GothamBold, Text = opts.Title or "调配菜单",
+        TextColor3 = themeColor(Q, "TextBright"), TextSize = 14,
+        TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 74,
+    })
+    local btnClose = mkIconButton(root, 22, -12, "Close", 12, true, 74)
+    btnClose.Position = UDim2.new(1, -12, 0, 21)
+
+    Util.Create("Frame", {
+        Parent = root, BackgroundColor3 = Color3.fromRGB(255, 255, 255),
+        BackgroundTransparency = 0.9, BorderSizePixel = 0,
+        Size = UDim2.new(1, -24, 0, 1), Position = UDim2.new(0, 12, 0, 40), ZIndex = 74,
+    })
+
+    -- 左侧导航
+    local NAV_W = 92
+    local navHost = Util.Create("Frame", {
+        Parent = root, BackgroundTransparency = 1, BorderSizePixel = 0,
+        Size = UDim2.new(0, NAV_W, 1, -56), Position = UDim2.new(0, 12, 0, 48), ZIndex = 74,
+    })
+    local content = Util.Create("ScrollingFrame", {
+        Parent = root, BackgroundTransparency = 1, BorderSizePixel = 0,
+        Size = UDim2.new(1, -(NAV_W + 34), 1, -58), Position = UDim2.new(0, NAV_W + 22, 0, 48),
+        CanvasSize = UDim2.new(0, 0, 0, 0), ScrollBarThickness = 3,
+        ScrollBarImageColor3 = accent, ScrollBarImageTransparency = 0.4, ZIndex = 74,
+    }, {
+        Util.Create("UIListLayout", { SortOrder = Enum.SortOrder.LayoutOrder, Padding = UDim.new(0, 2) }),
+    })
+    self.content = content
+    local clayout = content:FindFirstChildOfClass("UIListLayout")
+    if clayout then
+        clayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+            content.CanvasSize = UDim2.new(0, 0, 0, clayout.AbsoluteContentSize.Y)
+        end)
+    end
+
+    local navButtons = {}
+    local PAGES = { "界面", "音乐" }
+    local function selectPage(name)
+        self.page = name
+        for n, b in pairs(navButtons) do
+            b.BackgroundTransparency = (n == name) and 0.75 or 1
+            b.TextColor3 = (n == name) and themeColor(Q, "TextBright") or themeColor(Q, "TextFaint")
+        end
+        if self.buildPage then self.buildPage(name) end
+    end
+    for i, name in ipairs(PAGES) do
+        local b = Util.Create("TextButton", {
+            Parent = navHost, BackgroundColor3 = accent, BackgroundTransparency = 1,
+            BorderSizePixel = 0, Text = name,
+            Size = UDim2.new(1, 0, 0, 32), Position = UDim2.new(0, 0, 0, (i - 1) * 36),
+            Font = Enum.Font.GothamMedium, TextSize = 12,
+            TextColor3 = themeColor(Q, "TextFaint"), ZIndex = 75, AutoButtonColor = false,
+        }, { Util.Create("UICorner", { CornerRadius = UDim.new(0, 8) }) })
+        b.MouseButton1Click:Connect(function() snd("Click", 0.1) selectPage(name) end)
+        navButtons[name] = b
+    end
+    self.navButtons = navButtons
+
+    -- ── 界面页 ──────────────────────────────────────────────────
+    local function buildUIPage()
+        local I = (cls and cls.Internals) or {}
+        local themes, styles, layouts = cls.ThemeOrder or {}, cls.StyleOrder or {}, cls.LayoutOrder or {}
+        local borders, bmodes = I.BorderOrder or {}, I.BorderModes or {}
+        local function names(list, disp)
+            local out = {}
+            for i, k in ipairs(list) do
+                out[i] = disp and disp(k) or tostring(k)
+            end
+            return out
+        end
+        local themeNames = names(themes, function(k)
+            local t = cls.Themes and cls.Themes[k]
+            return t and t.DisplayName or k
+        end)
+        local styleNames = names(styles, function(k)
+            local d = cls.StyleDisplay
+            return d and d[k] or k
+        end)
+        local layoutNames = names(layouts, function(k)
+            local d = cls.LayoutDisplay
+            return d and d[k] or k
+        end)
+        local borderNames = names(borders, function(k)
+            local m = bmodes[k]
+            return m and m.DisplayName or k
+        end)
+        local function idxOf(list, key)
+            for i, k in ipairs(list) do if k == key then return i end end
+            return 1
+        end
+
+        local o = 0
+        local function next()
+            o = o + 1
+            return o
+        end
+
+        -- 当前主题：Themes[k].Accent 与实例的 ThemeColor 比对（source.lua 不存主题名）
+        local themeIdx = idxOf(themes, (function()
+            for _, k in ipairs(themes) do
+                local t = cls.Themes and cls.Themes[k]
+                if t and t.Accent == cls.ThemeColor then return k end
+            end
+            return themes[1]
+        end)())
+        self.refs.theme = cmStepper(content, next(), "主题", themeNames,
+            function() return themeIdx end,
+            function(i) themeIdx = i cls:SwitchTheme(themes[i]) end)
+
+        local styleIdx = idxOf(styles, cls.StyleName or styles[1])
+        local layoutIdx = idxOf(layouts, cls.CurrentLayout or layouts[1])
+
+        self.refs.style = cmStepper(content, next(), "风格", styleNames,
+            function() return styleIdx end,
+            function(i) styleIdx = i cls:SwitchStyle(styles[i]) end)
+        self.refs.layout = cmStepper(content, next(), "布局", layoutNames,
+            function() return layoutIdx end,
+            function(i) layoutIdx = i cls:SwitchLayout(layouts[i]) end)
+
+        cmSection(content, next(), "边框")
+        local borderIdx = idxOf(borders, cls.BorderMode)
+        self.refs.border = cmStepper(content, next(), "边框风格", borderNames,
+            function() return borderIdx end,
+            function(i) borderIdx = i cls:SetBorderMode(borders[i]) end)
+        self.refs.borderOn = cmSwitch(content, next(), "动态边框",
+            function()
+                if cls.BorderEnabled ~= nil then return cls.BorderEnabled end
+                return cls.RainbowEnabled ~= false
+            end,
+            function(v) cls:SetBorderEnabled(v) end)
+        self.refs.borderSpeed = cmSlider(content, next(), "边框速度", 0.1, 5,
+            function() return cls.RainbowSpeed or 1 end,
+            function(v) cls:SetBorderSpeed(v) end,
+            function(v) return string.format("%.1f", v) end)
+        self.refs.borderThick = cmSlider(content, next(), "边框粗细", 1, 6,
+            function() return cls.BorderThickness or 2 end,
+            function(v) cls:SetBorderThickness(math.floor(v + 0.5)) end,
+            function(v) return string.format("%d", math.floor(v + 0.5)) end)
+
+        cmSection(content, next(), "窗口")
+        self.refs.winAlpha = cmSlider(content, next(), "窗口透明度", 0, 1,
+            function() return cls.Transparency or 0 end,
+            function(v) if cls.SetTransparency then cls:SetTransparency(v) end end,
+            function(v) return string.format("%.0f%%", v * 100) end)
+    end
+
+    -- ── 音乐页 ──────────────────────────────────────────────────
+    local function buildMusicPage()
+        local o = 0
+        local function next()
+            o = o + 1
+            return o
+        end
+        local eng = opts.Engine
+        local ly = opts.Lyrics
+        local mini = opts.MiniBar
+
+        -- 账号（只读）
+        local accRow = cmRow(content, next(), 34)
+        cmLabel(accRow, "账号")
+        local accVal = Util.Create("TextLabel", {
+            Parent = accRow, BackgroundTransparency = 1, BorderSizePixel = 0,
+            Size = UDim2.new(0, 200, 1, 0), Position = UDim2.new(1, -6, 0, 0),
+            Font = Enum.Font.Gotham, Text = "…", TextColor3 = themeColor(Q, "TextBright"),
+            TextSize = 11, TextXAlignment = Enum.TextXAlignment.Right,
+            TextTruncate = Enum.TextTruncate.AtEnd, ZIndex = 62,
+        })
+        task.spawn(function()
+            if eng and eng.Login then
+                local ok, a = pcall(function() return eng.Login() end)
+                accVal.Text = (ok and a) and (tostring(a.nickname) .. " · " .. tostring(a.vipName)) or "未登录"
+            else
+                accVal.Text = "无引擎"
+            end
+        end)
+
+        self.refs.playing = cmSwitch(content, next(), "播放 / 暂停",
+            function() return opts.GetPlaying and opts.GetPlaying() or false end,
+            function() if eng then eng.Toggle() end end)
+
+        self.refs.volume = cmSlider(content, next(), "音量", 0, 1,
+            function() return opts.GetVolume and opts.GetVolume() or 0.6 end,
+            function(v) if eng then eng.SetVolume(v) end if opts.OnVolume then opts.OnVolume(v) end end,
+            function(v) return string.format("%.0f%%", v * 100) end)
+
+        cmSection(content, next(), "歌词浮层")
+        self.refs.lyShow = cmSwitch(content, next(), "显示歌词",
+            function() return ly and ly:IsVisible() or false end,
+            function(v) if not ly then return end if v then ly:Show() else ly:Hide() end end)
+        self.refs.lyAlpha = cmSlider(content, next(), "歌词透明度", 0, 1,
+            function() return ly and ly.transparency or 0.35 end,
+            function(v) if ly then ly:SetTransparency(v) end end,
+            function(v) return string.format("%.0f%%", v * 100) end)
+        self.refs.lyBlock = cmSwitch(content, next(), "歌词挡操作",
+            function() return ly and ly:IsBlockingInput() or false end,
+            function(v) if ly then ly:SetBlockInput(v) end end)
+        Util.Create("TextLabel", {
+            Parent = content, BackgroundTransparency = 1, BorderSizePixel = 0,
+            Size = UDim2.new(1, 0, 0, 26), LayoutOrder = next(),
+            Font = Enum.Font.Gotham, Text = "关闭后歌词只是浮层，鼠标点击会穿透到游戏",
+            TextColor3 = themeColor(Q, "TextFaint"), TextSize = 10,
+            TextXAlignment = Enum.TextXAlignment.Left, TextWrapped = true, ZIndex = 62,
+        })
+
+        cmSection(content, next(), "悬浮窗")
+        self.refs.miniShow = cmSwitch(content, next(), "迷你播放条",
+            function() return mini and mini:IsVisible() or false end,
+            function(v) if not mini then return end if v then mini:Show() mini:Wake(8) else mini:Hide() end end)
+        self.refs.panelShow = cmSwitch(content, next(), "完整音乐窗口",
+            function() return opts.Panel and opts.Panel:IsVisible() or false end,
+            function(v)
+                local p = opts.Panel
+                if not p then return end
+                if v then p:Show() else p:Hide() end
+            end)
+    end
+
+    function self:buildPage(name)
+        for _, d in ipairs(content:GetChildren()) do
+            if not d:IsA("UIListLayout") then pcall(function() d:Destroy() end) end
+        end
+        self.refs = {}
+        if name == "界面" then buildUIPage() else buildMusicPage() end
+    end
+
+    -- ── 开 / 关 ─────────────────────────────────────────────────
+    local function refresh()
+        for _, r in pairs(self.refs) do
+            if type(r) == "table" and r.sync then pcall(r.sync) end
+        end
+    end
+    self.refresh = refresh
+
+    function self:Open()
+        if self.open then return end
+        self.open = true
+        self:buildPage(self.page)
+        backdrop.Visible = true
+        root.Visible = true
+        scale.Scale = 0.92
+        root.BackgroundTransparency = 1
+        Util.Tween(scale, { Scale = 1 }, 0.22)
+        Util.Tween(root, { BackgroundTransparency = 0.08 }, 0.22)
+        Util.Tween(backdrop, { BackgroundTransparency = 0.55 }, 0.22)
+    end
+
+    function self:Close()
+        if not self.open then return end
+        self.open = false
+        Util.Tween(scale, { Scale = 0.92 }, 0.16)
+        Util.Tween(root, { BackgroundTransparency = 1 }, 0.16)
+        Util.Tween(backdrop, { BackgroundTransparency = 1 }, 0.16)
+        task.delay(0.18, function()
+            if not self.open then root.Visible = false backdrop.Visible = false end
+        end)
+    end
+
+    function self:Toggle()
+        if self.open then self:Close() else self:Open() end
+    end
+    function self:IsOpen() return self.open end
+    function self:GetFrame() return root end
+    function self:SetPage(name) selectPage(name) end
+    function self:Destroy() self.alive = false pcall(function() root:Destroy() backdrop:Destroy() end) end
+
+    btnClose.MouseButton1Click:Connect(function() snd("Click", 0.1) self:Close() end)
+    backdrop.MouseButton1Click:Connect(function() self:Close() end)
+
+    -- 标题栏拖动
+    local dragStart, startPos = nil, nil
+    root.InputBegan:Connect(function(i)
+        if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
+            if i.Position.Y - root.AbsolutePosition.Y > 44 then return end   -- 只在标题栏拖
+            dragStart = i.Position
+            startPos = Vector2.new(root.AbsolutePosition.X, root.AbsolutePosition.Y)
+        end
+    end)
+    UserInputService.InputChanged:Connect(function(i)
+        if not dragStart then return end
+        if i.UserInputType ~= Enum.UserInputType.MouseMovement and i.UserInputType ~= Enum.UserInputType.Touch then return end
+        local d = i.Position - dragStart
+        if math.abs(d.X) + math.abs(d.Y) < 6 then return end
+        root.AnchorPoint = Vector2.new(0, 0)
+        root.Position = UDim2.new(0, startPos.X + d.X, 0, startPos.Y + d.Y)
+    end)
+    UserInputService.InputEnded:Connect(function(i)
+        if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
+            dragStart = nil
+        end
+    end)
+
+    -- 热键
+    local key = opts.Key or Enum.KeyCode.RightShift
+    UserInputService.InputBegan:Connect(function(input, gpe)
+        if gpe then return end
+        if input.KeyCode == key then self:Toggle() end
+    end)
+    self.key = key
+
+    selectPage(self.page)
+    return self
+end
+
+-- 用法：MusicUI.CreateControlMenu(QuantumUI, { Engine=..., Lyrics=..., MiniBar=..., Panel=... })
+function MusicUI.CreateControlMenu(a, b)
+    local cls, opts
+    if type(a) == "table" and (a.ScreenGui or a.MainFrame) then cls, opts = a, (b or {})
+    else cls, opts = Q, (a or {}) end
+    local host = opts.Parent or (cls and cls.ScreenGui)
+    if not host then return nil, "找不到宿主 ScreenGui" end
+    if cls and cls ~= Q then bindInternals(cls) end
+    return buildControlMenu(host, cls, opts)
+end
+
 function MusicUI.Attach(cls)
     if type(cls) ~= "table" then
         error("[MusicUI] Attach(QuantumUI) 需要传入 QuantumUI 类表")
