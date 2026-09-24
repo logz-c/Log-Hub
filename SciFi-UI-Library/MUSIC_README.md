@@ -314,3 +314,83 @@ MusicUI.BindEngine(Tab, myEngine, {})
 - 网易云引擎未登录时只有免费歌能播（搜索结果的 ~17%）；登录后 100%。
   引擎启动会自动读 `NetMusicCfg/cookie.json` 恢复登录态。
 - 本地收藏（`FavToggle` / `FavHas`）与云端红心是两套，互不影响。
+
+---
+
+## 六、迷你播放条 —— 保持在前台但不挡游玩（v1.2）
+
+整块音乐窗口会盖住屏幕中央。如果你想让音乐控件**一直在前台、又不影响正常游玩**，
+用迷你播放条：一条贴在屏幕边缘的细条，默认半透明，鼠标悬停才变实，
+离开几秒后自动淡到几乎只剩轮廓。
+
+```lua
+local Bar = MusicUI.CreateMiniBar(Win, {
+    Dock      = "Top",        -- Top/Bottom/TopLeft/TopRight/BottomLeft/BottomRight
+    Width     = 400,          -- 实际会被夹到「视口 45%」以内（下限 240）
+    Height    = 38,
+    IdleAlpha = 0.35,         -- 常态透明度
+    HoverAlpha= 0.02,         -- 鼠标移上去
+    AwayAlpha = 0.62,         -- 闲置 N 秒后（还要能看清歌名，别调太高）
+    AwayDelay = 5,
+    OnExpand  = function(bar) end,   -- 点「展开」按钮
+    OnClose   = function(bar) end,   -- 点「关闭」按钮
+})
+
+Bar:BindNetease()            -- 或 Bar:Bind(engine) 接任意标准后端
+```
+
+### 交互
+
+| 操作 | 效果 |
+|---|---|
+| 鼠标移上去 | 变实（HoverAlpha），离开后回到常态，再闲置则淡出 |
+| 拖整条 | 自由移动，松手**自动吸附**到最近的边缘/角落 |
+| 点进度线 / 拖动 | 跳转播放位置 |
+| **滚轮** | 直接调音量（不占任何 UI） |
+| 点音量图标 | 静音 / 恢复 |
+| 点展开 | 触发 `OnExpand`（可以在这里打开完整音乐窗口） |
+| 换歌时 | 自动 `Wake()` 闪一下，提示用户切歌了 |
+
+### 方法
+
+```lua
+Bar:SetDock("BottomRight")     -- 换停靠位（带动画）
+Bar:SetWidth(360)
+Bar:Wake(10)                   -- 从淡出档恢复到常态档，保持 10 秒
+Bar:SetSong({Title=, Artist=, Cover=})
+Bar:SetPlaying(true)  Bar:SetProgress(pos, len)  Bar:SetStatus("缓冲中…")
+Bar:SetVolume(0.5)
+Bar:Show()  Bar:Hide()  Bar:Toggle()  Bar:IsVisible()
+Bar:GetFrame()  Bar:Destroy()
+```
+
+### 为什么「不影响游玩」
+
+- **贴边不贴中心** —— 默认 Top 且下移 46px 避开 Roblox 顶栏，不挡准星
+- **半透明** —— 常态 0.35，闲置 0.62，背后场景始终可见
+- **占地小** —— 高度只有 38px，宽度自动夹在视口 45% 以内
+- **不抢焦点** —— 没有输入框，滚轮调音量不弹面板
+
+### 完整示例：只有迷你条在跑
+
+```lua
+local BASE = "https://raw.githubusercontent.com/logz-c/Log-Hub/main/SciFi-UI-Library/"
+
+getgenv().NCM_OPTIONS = { Headless = true }
+loadstring(game:HttpGet(BASE .. "netease-engine.lua"))()
+
+local QuantumUI = loadstring(game:HttpGet(BASE .. "source.lua"))()
+local MusicUI   = loadstring(game:HttpGet(BASE .. "music.lua"))()(QuantumUI)
+
+local Win = QuantumUI.new({ Title = "My Hub" })
+Win.MainFrame.Visible = false        -- 藏掉主窗口，只留迷你条
+
+local Bar = MusicUI.CreateMiniBar(Win, { Dock = "Top" })
+Bar:BindNetease()
+
+-- 想播歌：直接用引擎，条会自动同步
+local NCM = getgenv().NCM
+local list = NCM.Search("周杰伦", 10)
+NCM.SetQueue(list, 1)
+NCM.Play(list[1])
+```
