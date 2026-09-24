@@ -3995,7 +3995,7 @@ local function buildControlMenu(host, cls, opts)
             b.BackgroundTransparency = (n == name) and 0.75 or 1
             b.TextColor3 = (n == name) and themeColor(Q, "TextBright") or themeColor(Q, "TextFaint")
         end
-        if self.buildPage then self.buildPage(name) end
+        if self.buildPage then self:buildPage(name) end   -- 必须用冒号，否则 name 会被当成 self
     end
     for i, name in ipairs(PAGES) do
         local b = Util.Create("TextButton", {
@@ -4050,32 +4050,28 @@ local function buildControlMenu(host, cls, opts)
         end
 
         -- 当前主题：Themes[k].Accent 与实例的 ThemeColor 比对（source.lua 不存主题名）
-        local themeIdx = idxOf(themes, (function()
-            for _, k in ipairs(themes) do
-                local t = cls.Themes and cls.Themes[k]
-                if t and t.Accent == cls.ThemeColor then return k end
-            end
-            return themes[1]
-        end)())
+        -- 索引都「实时读当前值」，这样外部改了设置菜单也能跟着显示
         self.refs.theme = cmStepper(content, next(), "主题", themeNames,
-            function() return themeIdx end,
-            function(i) themeIdx = i cls:SwitchTheme(themes[i]) end)
-
-        local styleIdx = idxOf(styles, cls.StyleName or styles[1])
-        local layoutIdx = idxOf(layouts, cls.CurrentLayout or layouts[1])
+            function()
+                for i, k in ipairs(themes) do
+                    local t = cls.Themes and cls.Themes[k]
+                    if t and t.Accent == cls.ThemeColor then return i end
+                end
+                return 1
+            end,
+            function(i) cls:SwitchTheme(themes[i]) end)
 
         self.refs.style = cmStepper(content, next(), "风格", styleNames,
-            function() return styleIdx end,
-            function(i) styleIdx = i cls:SwitchStyle(styles[i]) end)
+            function() return idxOf(styles, cls.StyleName or styles[1]) end,
+            function(i) cls:SwitchStyle(styles[i]) end)
         self.refs.layout = cmStepper(content, next(), "布局", layoutNames,
-            function() return layoutIdx end,
-            function(i) layoutIdx = i cls:SwitchLayout(layouts[i]) end)
+            function() return idxOf(layouts, cls.CurrentLayout or layouts[1]) end,
+            function(i) cls:SwitchLayout(layouts[i]) end)
 
         cmSection(content, next(), "边框")
-        local borderIdx = idxOf(borders, cls.BorderMode)
         self.refs.border = cmStepper(content, next(), "边框风格", borderNames,
-            function() return borderIdx end,
-            function(i) borderIdx = i cls:SetBorderMode(borders[i]) end)
+            function() return idxOf(borders, cls.BorderMode) end,
+            function(i) cls:SetBorderMode(borders[i]) end)
         self.refs.borderOn = cmSwitch(content, next(), "动态边框",
             function()
                 if cls.BorderEnabled ~= nil then return cls.BorderEnabled end
