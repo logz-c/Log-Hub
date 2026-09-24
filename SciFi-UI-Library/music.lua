@@ -2470,7 +2470,9 @@ local function buildMiniBar(host, opts)
     self._hoverUntil = os.clock() + self.awayDelay
 
     local H = opts.Height or 38
-    local W = opts.Width or 400
+    -- 宽度自适应：默认不超过视口的 45%，避免在窄窗口/手机上盖住半个屏幕
+    local vp0 = (workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize) or Vector2.new(1280, 720)
+    local W = math.min(opts.Width or 400, math.max(240, math.floor(vp0.X * 0.45)))
     local accent = themeColor(Q, "Accent")
 
     local root = Util.Create("Frame", {
@@ -2753,6 +2755,13 @@ local function buildMiniBar(host, opts)
         self.volume = math.clamp(v or 0, 0, 1)
     end
 
+    -- 唤醒：从「淡出档」恢复到常态档（切歌、刚展开、外部想提示用户时调）
+    function self:Wake(hold)
+        self._hoverUntil = os.clock() + (hold or self.awayDelay)
+        Util.Tween(root, { BackgroundTransparency = self.idleAlpha }, 0.25)
+        Util.Tween(stroke, { Transparency = 0.55 }, 0.25)
+    end
+
     function self:Show() root.Visible = true end
     function self:Hide() root.Visible = false end
     function self:IsVisible() return root.Visible end
@@ -2783,6 +2792,7 @@ local function buildMiniBar(host, opts)
                         lastId = song.id
                         self:SetSong({ Title = song.name, Artist = song.artist,
                                        Cover = song.cover })
+                        self:Wake()   -- 换歌时闪一下，让用户知道切了
                     elseif not song and lastId ~= "none" then
                         lastId = "none"
                         self:SetSong({})
