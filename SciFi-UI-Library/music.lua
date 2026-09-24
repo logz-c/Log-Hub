@@ -2520,7 +2520,7 @@ local function buildMiniBar(host, opts)
         Size = UDim2.new(1, -200, 0, 13),
         Position = UDim2.new(0, H - 2, 0, 20),
         Font = Enum.Font.Gotham, Text = "",
-        TextColor3 = themeColor(Q, "TextFaint"), TextSize = 11,
+        TextColor3 = themeColor(Q, "TextDim"), TextSize = 11,
         TextXAlignment = Enum.TextXAlignment.Left,
         TextTruncate = Enum.TextTruncate.AtEnd, ZIndex = 62,
     })
@@ -2547,7 +2547,8 @@ local function buildMiniBar(host, opts)
             BackgroundTransparency = 1, BorderSizePixel = 0, Text = "",
             Size = UDim2.new(0, size, 0, size),
             Position = UDim2.new(1, rightOffset, 0.5, 0),
-            AnchorPoint = Vector2.new(0, 0.5), ZIndex = 64, AutoButtonColor = false,
+            -- 锚在右边缘：rightOffset 是「右边缘距条右边多少」，否则整排会溢出被裁
+            AnchorPoint = Vector2.new(1, 0.5), ZIndex = 64, AutoButtonColor = false,
         }, { Util.Create("UICorner", { CornerRadius = UDim.new(0, 6) }) })
         local ic = makeIcon(b, iconKey, iconSize or (size - 12), themeColor(Q, "TextDim"), 65)
         b.MouseEnter:Connect(function()
@@ -2562,12 +2563,13 @@ local function buildMiniBar(host, opts)
         return b, ic
     end
 
-    local btnClose = mkBtn(22, -6, "Close", 12)
-    local btnExpand = mkBtn(22, -30, "Queue", 12)
-    local btnVol = mkBtn(22, -54, "Volume", 13)
-    local btnNext = mkBtn(24, -80, "Next", 13)
-    local btnPlay = mkBtn(28, -108, "Play", 14)
-    local btnPrev = mkBtn(24, -138, "Prev", 13)
+    -- 右边缘锚点：offset = 该键右边缘到条右边的距离（逐键累加宽度 + 间隔）
+    local btnClose  = mkBtn(22, -6,   "Close", 12)
+    local btnExpand = mkBtn(22, -32,  "Queue", 12)
+    local btnVol    = mkBtn(22, -58,  "Volume", 13)
+    local btnNext   = mkBtn(24, -86,  "Next", 13)
+    local btnPlay   = mkBtn(28, -116, "Play", 14)
+    local btnPrev   = mkBtn(24, -148, "Prev", 13)
     self.btnPlay, self.btnPlayIcon = btnPlay, nil
 
     -- ── 交互：悬停变实 / 闲置淡出 ────────────────────────────────
@@ -2711,7 +2713,7 @@ local function buildMiniBar(host, opts)
             sub.TextColor3 = themeColor(Q, "Accent")
         else
             sub.Text = self.artist or ""
-            sub.TextColor3 = themeColor(Q, "TextFaint")
+            sub.TextColor3 = themeColor(Q, "TextDim")
         end
     end
 
