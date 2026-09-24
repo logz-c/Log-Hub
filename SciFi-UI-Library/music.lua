@@ -2652,7 +2652,7 @@ local function buildMusicPanel(host, opts)
                         lyricMiss = self.lyricLines and nil or 0
                         if self.tab == "歌词" then self:Refresh() end
                         if self.miniBar then self.miniBar:Wake() end
-                    elseif song and not self.lyricLines and (lyricMiss or 0) < 30 then
+                    elseif song and not self.lyricLines and (lyricMiss or 0) < 200    -- 约 50s：下载一首歌可能就要 17s，歌词要等下载完才拉 then
                         -- 补拉歌词（最多 30 次 ≈ 7.5s，够下载+解析了）
                         lyricMiss = (lyricMiss or 0) + 1
                         self.lyricLines = engine.Lyric and engine.Lyric() or nil
@@ -3733,7 +3733,7 @@ local function buildLyricsOverlay(host, opts)
                         self:SetLines(lines)
                         miss = lines and nil or 0
                         lastIdx = nil
-                    elseif song and #self.lines == 0 and (miss or 0) < 30 then
+                    elseif song and #self.lines == 0 and (miss or 0) < 200        -- 约 50s：下载一首歌可能就要 17s then
                         miss = (miss or 0) + 1
                         self:SetLines(engine.Lyric and engine.Lyric() or nil)
                     end
