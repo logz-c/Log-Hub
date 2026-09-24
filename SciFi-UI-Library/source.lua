@@ -1,8 +1,20 @@
 --[[
     ╔══════════════════════════════════════════════════════════════════╗
     ║                        QUANTUM UI LIBRARY                        ║
-    ║            Version 3.4.0 - Style Engine                          ║
+    ║            Version 3.5.0 - Style & Border Engine                 ║
     ║                         Created by log_quick                     ║
+    ║                                                                  ║
+    ║  Changelog v3.5.0:                                              ║
+    ║  • NEW: 边框风格引擎 BorderEngine —— 一条 RenderStepped(30fps)  ║
+    ║       统一驱动所有 UIStroke 的 UIGradient                        ║
+    ║  • NEW: 5 种边框模式 Solid / Rainbow / Aurora / Pulse / Neon    ║
+    ║       （彩虹流光 / 极光摆动 / 主题色呼吸 / 高光旋转扫光）        ║
+    ║  • NEW: Window:AddBorder(el, opts) / RemoveBorder(el)           ║
+    ║       —— 窗口主边框之外的任意 GuiObject 也能挂彩虹边框           ║
+    ║  • NEW: SetBorderMode / SetBorderEnabled / SetBorderSpeed /     ║
+    ║       SetBorderThickness，全部持久化进 LayoutPrefs               ║
+    ║  • CHG: FlatBorder(Vape) 只决定默认模式，用户显式选过则尊重用户  ║
+    ║  • FIX: 边框刷新节流到 30fps（原来每帧重建 ColorSequence）      ║
     ║                                                                  ║
     ║  Changelog v3.4.0:                                              ║
     ║  • NEW: 视觉风格 Style 层（锐利/柔和/圆润/玻璃），与配色解耦，   ║
@@ -22,12 +34,16 @@
 
 local QuantumUI = {}
 QuantumUI.__index = QuantumUI
-QuantumUI.Version = "3.4.0"
+QuantumUI.Version = "3.5.0"
 QuantumUI.Author = "log_quick"
 QuantumUI.ThemeColor = Color3.fromRGB(0, 200, 255)
 QuantumUI.Transparency = 0.3
-QuantumUI.RainbowEnabled = true
+QuantumUI.RainbowEnabled = true   -- 兼容旧字段：边框总开关（BorderEnabled 为 nil 时用它）
 QuantumUI.RainbowSpeed = 1
+-- v3.5 边框风格引擎
+QuantumUI.BorderEnabled = nil     -- nil = 跟随 RainbowEnabled；显式 true/false 优先
+QuantumUI.BorderMode = "Rainbow"  -- Solid / Rainbow / Aurora / Pulse / Neon
+QuantumUI.BorderThickness = 2
 QuantumUI.Instance = nil  -- 单例：防止重复注入
 QuantumUI.Assets = CustomAssets
 QuantumUI.RainbowColors = {
@@ -775,45 +791,199 @@ function ConfigSystem.ClearAutoLoad()
 end
 
 -- ═══════════════════════════════════════════════════════════════════
---                          RAINBOW HANDLER
+--   BORDER ENGINE (v3.5) — 边框风格引擎
+--   一条 RenderStepped 循环统一驱动所有已登记 UIStroke 的 UIGradient，
+--   任意 GuiObject 都能挂：窗口主边框 / 面板 / 按钮 / 卡片
+--   模式：Solid 纯色 · Rainbow 彩虹流光 · Aurora 极光 · Pulse 呼吸 · Neon 霓虹扫光
 -- ═══════════════════════════════════════════════════════════════════
 
-local RainbowHandler = {Objects = {}, Connection = nil}
+local BorderModes = {
+    Solid   = {DisplayName = "纯色 Solid",       Desc = "跟随主题色的静态描边"},
+    Rainbow = {DisplayName = "彩虹流光 Rainbow", Desc = "7 色 HSV 环绕流动"},
+    Aurora  = {DisplayName = "极光 Aurora",      Desc = "青→紫→粉 缓慢摆动"},
+    Pulse   = {DisplayName = "呼吸 Pulse",       Desc = "主题色明暗呼吸"},
+    Neon    = {DisplayName = "霓虹扫光 Neon",    Desc = "高光沿边框旋转"},
+}
+local BorderOrder = {"Solid", "Rainbow", "Aurora", "Pulse", "Neon"}
 
-function RainbowHandler.Add(object)
-    table.insert(RainbowHandler.Objects, object)
+local BorderEngine = {
+    Objects    = {},   -- {Stroke=UIStroke, Mode=string, BaseTransparency=number}
+    Connection = nil,
+    Time       = 0,
+    Acc        = 0,
+    FPS        = 30,   -- 边框刷新率：不需要跟满帧
+}
+
+local RAINBOW_STOPS = 7
+
+-- ── 各模式的 UIGradient 写入器 ──────────────────────────────────────
+local function writeRainbow(gradient, hue)
+    local seq = table.create(RAINBOW_STOPS)
+    for j = 1, RAINBOW_STOPS do
+        seq[j] = ColorSequenceKeypoint.new(
+            (j - 1) / (RAINBOW_STOPS - 1),
+            Utility.HSVToRGB((hue + (j - 1) / RAINBOW_STOPS) % 1, 1, 1))
+    end
+    gradient.Color = ColorSequence.new(seq)
 end
 
-function RainbowHandler.Start()
-    if RainbowHandler.Connection then return end
-    local hue = 0
-    RainbowHandler.Connection = RunService.RenderStepped:Connect(function(dt)
-        if not QuantumUI.RainbowEnabled then return end
-        hue = (hue + dt * QuantumUI.RainbowSpeed * 0.1) % 1
-        for i = #RainbowHandler.Objects, 1, -1 do
-            local obj = RainbowHandler.Objects[i]
-            if obj and obj.Parent then
-                local gradient = obj:FindFirstChildOfClass("UIGradient")
-                if gradient then
-                    local colors = {}
-                    for j = 1, 7 do
-                        colors[j] = ColorSequenceKeypoint.new((j-1)/6, Utility.HSVToRGB((hue + (j-1)/7) % 1, 1, 1))
-                    end
-                    gradient.Color = ColorSequence.new(colors)
-                end
-            else
-                table.remove(RainbowHandler.Objects, i)
+local function writeAurora(gradient, t)
+    local ph = t * 0.45
+    gradient.Rotation = 30 + math.sin(t * 0.9) * 40
+    gradient.Color = ColorSequence.new({
+        ColorSequenceKeypoint.new(0,   Utility.HSVToRGB((0.50 + math.sin(ph) * 0.10) % 1, 0.72, 1)),
+        ColorSequenceKeypoint.new(0.5, Utility.HSVToRGB((0.76 + math.cos(ph * 0.8) * 0.09) % 1, 0.80, 1)),
+        ColorSequenceKeypoint.new(1,   Utility.HSVToRGB((0.93 + math.sin(ph * 0.6) * 0.07) % 1, 0.68, 1)),
+    })
+end
+
+local function writePulse(gradient, base)
+    gradient.Rotation = 0
+    gradient.Color = ColorSequence.new({
+        ColorSequenceKeypoint.new(0,   base),
+        ColorSequenceKeypoint.new(0.5, base:Lerp(Color3.new(1, 1, 1), 0.6)),
+        ColorSequenceKeypoint.new(1,   base),
+    })
+end
+
+local function writeNeon(gradient, t, base)
+    gradient.Rotation = (t * 70) % 360
+    gradient.Color = ColorSequence.new({
+        ColorSequenceKeypoint.new(0,    base),
+        ColorSequenceKeypoint.new(0.42, Color3.new(1, 1, 1)),
+        ColorSequenceKeypoint.new(0.58, Color3.new(1, 1, 1)),
+        ColorSequenceKeypoint.new(1,    base),
+    })
+end
+
+-- 更新单个登记对象；返回 false = 对象已销毁，调用方负责移除
+local function updateBorder(entry, t)
+    local stroke = entry.Stroke
+    if not (stroke and stroke.Parent) then return false end
+    local mode = entry.Mode or QuantumUI.BorderMode or "Rainbow"
+    local speed = QuantumUI.RainbowSpeed or 1
+    local base = entry.BaseColor or QuantumUI.ThemeColor or Color3.new(1, 1, 1)
+    local baseT = entry.BaseTransparency or 0.3
+
+    if mode == "Solid" then
+        local g = stroke:FindFirstChildOfClass("UIGradient")
+        if g then g.Enabled = false end
+        pcall(function()
+            stroke.Color = base
+            stroke.Transparency = baseT
+        end)
+        return true
+    end
+
+    local gradient = stroke:FindFirstChildOfClass("UIGradient")
+    if not gradient then
+        gradient = Instance.new("UIGradient")
+        gradient.Parent = stroke
+    end
+    gradient.Enabled = true
+
+    if mode == "Rainbow" then
+        gradient.Rotation = 0
+        writeRainbow(gradient, (t * 0.1 * speed) % 1)
+        pcall(function() stroke.Transparency = baseT end)
+    elseif mode == "Aurora" then
+        writeAurora(gradient, t * speed)
+        pcall(function() stroke.Transparency = baseT + 0.05 end)
+    elseif mode == "Pulse" then
+        writePulse(gradient, base)
+        local k = math.sin(t * speed * 2.2) * 0.5 + 0.5
+        pcall(function() stroke.Transparency = 0.12 + k * 0.5 end)
+    elseif mode == "Neon" then
+        writeNeon(gradient, t * speed, base)
+        pcall(function() stroke.Transparency = math.max(0.08, baseT * 0.45) end)
+    end
+    return true
+end
+
+-- ── 公共接口 ────────────────────────────────────────────────────────
+function BorderEngine.Register(stroke, mode, opts)
+    if not stroke then return nil end
+    opts = opts or {}
+    for _, e in ipairs(BorderEngine.Objects) do
+        if e.Stroke == stroke then
+            if mode then e.Mode = mode end
+            if opts.BaseTransparency then e.BaseTransparency = opts.BaseTransparency end
+            if opts.BaseColor then e.BaseColor = opts.BaseColor end
+            BorderEngine.Start()
+            return e
+        end
+    end
+    local entry = {
+        Stroke           = stroke,
+        Mode             = mode or QuantumUI.BorderMode or "Rainbow",
+        BaseTransparency = opts.BaseTransparency or 0.3,
+        BaseColor        = opts.BaseColor,
+    }
+    BorderEngine.Objects[#BorderEngine.Objects + 1] = entry
+    BorderEngine.Start()
+    return entry
+end
+
+function BorderEngine.Unregister(stroke)
+    for i = #BorderEngine.Objects, 1, -1 do
+        if BorderEngine.Objects[i].Stroke == stroke then
+            table.remove(BorderEngine.Objects, i)
+        end
+    end
+end
+
+function BorderEngine.SetMode(mode, stroke)
+    for _, e in ipairs(BorderEngine.Objects) do
+        if not stroke or e.Stroke == stroke then e.Mode = mode end
+    end
+end
+
+function BorderEngine.SetThickness(px)
+    for _, e in ipairs(BorderEngine.Objects) do
+        if e.Stroke and e.Stroke.Parent then
+            pcall(function() e.Stroke.Thickness = px end)
+        end
+    end
+end
+
+function BorderEngine.Count() return #BorderEngine.Objects end
+
+function BorderEngine.Start()
+    if BorderEngine.Connection then return end
+    BorderEngine.Connection = RunService.RenderStepped:Connect(function(dt)
+        -- 节流到 ~30fps：边框不需要跟满帧，省性能
+        BorderEngine.Acc = BorderEngine.Acc + dt
+        if BorderEngine.Acc < 1 / BorderEngine.FPS then return end
+        BorderEngine.Acc = 0
+        BorderEngine.Time = BorderEngine.Time + dt
+
+        local enabled = QuantumUI.BorderEnabled
+        if enabled == nil then enabled = QuantumUI.RainbowEnabled end
+        if enabled == false then return end
+
+        local t = BorderEngine.Time
+        for i = #BorderEngine.Objects, 1, -1 do
+            if not updateBorder(BorderEngine.Objects[i], t) then
+                table.remove(BorderEngine.Objects, i)
             end
         end
     end)
 end
 
-function RainbowHandler.Stop()
-    if RainbowHandler.Connection then
-        RainbowHandler.Connection:Disconnect()
-        RainbowHandler.Connection = nil
+function BorderEngine.Stop()
+    if BorderEngine.Connection then
+        BorderEngine.Connection:Disconnect()
+        BorderEngine.Connection = nil
     end
 end
+
+function BorderEngine.Clear()
+    BorderEngine.Stop()
+    table.clear(BorderEngine.Objects)
+end
+
+-- 向后兼容：旧代码 / 旧文档里的 RainbowHandler
+local RainbowHandler = BorderEngine
 
 -- ═══════════════════════════════════════════════════════════════════
 --                          MAIN LIBRARY
@@ -875,6 +1045,17 @@ function QuantumUI.new(options)
             if prefs.Layout and LayoutDisplay[prefs.Layout] then self.CurrentLayout = prefs.Layout end
             if prefs.Theme and Themes[prefs.Theme] then self.ThemeName = prefs.Theme end
             if prefs.Style and Styles[prefs.Style] then self.StyleName = prefs.Style end
+            -- v3.5 边框偏好
+            if prefs.BorderMode and BorderModes[prefs.BorderMode] then
+                QuantumUI.BorderMode = prefs.BorderMode
+                QuantumUI._BorderUserSet = true
+            end
+            if prefs.BorderEnabled ~= nil then
+                QuantumUI.BorderEnabled = prefs.BorderEnabled and true or false
+                QuantumUI.RainbowEnabled = QuantumUI.BorderEnabled
+            end
+            if tonumber(prefs.BorderSpeed) then QuantumUI.RainbowSpeed = tonumber(prefs.BorderSpeed) end
+            if tonumber(prefs.BorderThickness) then QuantumUI.BorderThickness = tonumber(prefs.BorderThickness) end
         end
     end)
     self.ActiveStyle = Styles[self.StyleName] or Styles.Sharp
@@ -1123,19 +1304,21 @@ function QuantumUI:CreateWindowShell()
         })
     end
 
+    -- 窗口主边框：交给边框引擎按当前模式驱动
+    --   FlatBorder（Vape）只决定「默认模式」，用户显式选过风格后一律尊重用户
+    local borderMode = QuantumUI.BorderMode or "Rainbow"
+    if self.FlatBorder and not QuantumUI._BorderUserSet then borderMode = "Solid" end
+
     local borderStroke = Utility.Create("UIStroke", {
         Parent = self.MainFrame,
         Color = self.ThemeColor,
-        Thickness = 2,
+        Thickness = QuantumUI.BorderThickness or 2,
         Transparency = 0.3
     })
     self:AddThemeElement(borderStroke, "Color")
-    if not self.FlatBorder then
-        local borderGradient = Utility.CreateGradient(QuantumUI.RainbowColors, 0)
-        borderGradient.Parent = borderStroke
-        RainbowHandler.Add(borderStroke)
-        RainbowHandler.Start()
-    end
+    pcall(function() borderStroke:SetAttribute("StyleExempt", true) end)  -- 别被风格层改粗细/透明度
+    self.BorderStroke = borderStroke
+    BorderEngine.Register(borderStroke, borderMode, {BaseTransparency = 0.3})
 
     Utility.Create("ImageLabel", {
         Parent = self.MainFrame,
@@ -2230,6 +2413,10 @@ function QuantumUI:_SaveLayoutPrefs()
         Layout = self.CurrentLayout,
         Theme  = self.ThemeName,
         Style  = self.StyleName,
+        BorderMode      = QuantumUI.BorderMode,
+        BorderEnabled   = QuantumUI.BorderEnabled,
+        BorderSpeed     = QuantumUI.RainbowSpeed,
+        BorderThickness = QuantumUI.BorderThickness,
     })
 end
 
@@ -2292,6 +2479,7 @@ function QuantumUI:_TeardownLayout()
     self.StatusBar = nil          -- v3.4: Vape 状态栏（循环刷新靠它判定退出）
     self.StatusText = nil
     self.StatusClock = nil
+    self.BorderStroke = nil       -- v3.5: 主边框（引擎会自动剔除已销毁的）
     self:RefreshTheme()  -- 顺带清理已销毁的 ThemeElements
 end
 
@@ -2502,6 +2690,100 @@ function QuantumUI:SwitchStyle(styleName)
         Type = "Info",
     })
 end
+
+-- ═══════════════════════════════════════════════════════════════════
+--  v3.5 边框风格：Solid / Rainbow / Aurora / Pulse / Neon
+-- ═══════════════════════════════════════════════════════════════════
+
+function QuantumUI:SetBorderMode(mode)
+    if not BorderModes[mode] then return end
+    QuantumUI.BorderMode = mode
+    QuantumUI._BorderUserSet = true
+    BorderEngine.SetMode(mode)
+    -- Solid 模式把渐变关掉、回到主题色；其它模式由引擎接管
+    self:Notify({
+        Title = "边框已切换",
+        Content = BorderModes[mode].DisplayName .. " · " .. BorderModes[mode].Desc,
+        Duration = 2,
+        Type = "Info",
+    })
+end
+
+function QuantumUI:SetBorderEnabled(on)
+    QuantumUI.BorderEnabled = on and true or false
+    QuantumUI.RainbowEnabled = QuantumUI.BorderEnabled
+end
+
+function QuantumUI:SetBorderSpeed(v)
+    QuantumUI.RainbowSpeed = tonumber(v) or 1
+end
+
+function QuantumUI:SetBorderThickness(px)
+    px = tonumber(px) or 2
+    QuantumUI.BorderThickness = px
+    BorderEngine.SetThickness(px)
+end
+
+-- 给任意 GuiObject 挂一条边框（窗口主边框之外的元素也能用）
+-- opts = {Mode=, Thickness=, Transparency=}
+function QuantumUI:AddBorder(element, opts)
+    if not element or not element:IsA("GuiObject") then return nil end
+    opts = opts or {}
+    local stroke = element:FindFirstChild("QBorderStroke")
+    if not stroke then
+        stroke = Utility.Create("UIStroke", {
+            Name = "QBorderStroke",
+            Parent = element,
+            Color = QuantumUI.ThemeColor,
+            Thickness = opts.Thickness or QuantumUI.BorderThickness or 2,
+            Transparency = opts.Transparency or 0.3,
+            ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
+        })
+        pcall(function() stroke:SetAttribute("StyleExempt", true) end)
+    end
+    BorderEngine.Register(stroke, opts.Mode or QuantumUI.BorderMode or "Rainbow", {
+        BaseTransparency = opts.Transparency or 0.3,
+    })
+    return stroke
+end
+
+function QuantumUI:RemoveBorder(element)
+    if not element then return end
+    local stroke = element:FindFirstChild("QBorderStroke")
+    if stroke then
+        BorderEngine.Unregister(stroke)
+        stroke:Destroy()
+    end
+end
+
+function QuantumUI:SetBorderThicknessOn(element, px)
+    local stroke = element and element:FindFirstChild("QBorderStroke")
+    if stroke then pcall(function() stroke.Thickness = px end) end
+end
+
+-- 给一批元素批量挂边框（filter 返回 true 才挂）
+function QuantumUI:AddBorderToDescendants(root, filter, opts)
+    if not root then return 0 end
+    local n = 0
+    for _, d in ipairs(root:GetDescendants()) do
+        if d:IsA("GuiObject") then
+            local ok = true
+            if type(filter) == "function" then
+                local r, keep = pcall(filter, d)
+                ok = r and keep and true or false
+            end
+            if ok and not d:FindFirstChild("QBorderStroke") then
+                self:AddBorder(d, opts)
+                n = n + 1
+            end
+        end
+    end
+    return n
+end
+
+-- 别名（更贴合「彩虹边框」的叫法）
+QuantumUI.AddRainbowBorder    = QuantumUI.AddBorder
+QuantumUI.RemoveRainbowBorder = QuantumUI.RemoveBorder
 
 -- NEW: Set custom background
 function QuantumUI:SetBackground(imageId, transparency)
@@ -5754,22 +6036,58 @@ function QuantumUI:CreateSettingsTab()
         end
     })
     
-    -- Rainbow Settings
-    settingsTab:AddSection({Name = "🌈 Rainbow Border"})
-    
-    self.RainbowBorderToggle = settingsTab:AddToggle({
-        Name = "Rainbow Border",
-        Default = QuantumUI.RainbowEnabled,
-        Callback = function(state) QuantumUI.RainbowEnabled = state end
+    -- ═══════════════════════════════════════
+    -- BORDER STYLE (v3.5)
+    -- ═══════════════════════════════════════
+    settingsTab:AddSection({Name = "🌈 边框风格 Border"})
+
+    local borderItems = {}
+    for _, k in ipairs(BorderOrder) do table.insert(borderItems, BorderModes[k].DisplayName) end
+
+    local borderEnabledDefault = QuantumUI.BorderEnabled
+    if borderEnabledDefault == nil then borderEnabledDefault = QuantumUI.RainbowEnabled end
+
+    self.BorderToggle = settingsTab:AddToggle({
+        Name = "启用动态边框",
+        Default = borderEnabledDefault and true or false,
+        Callback = function(state) self:SetBorderEnabled(state) end
     })
-    
-    self.RainbowSpeedSlider = settingsTab:AddSlider({
-        Name = "Rainbow Speed",
+    self.RainbowBorderToggle = self.BorderToggle   -- 兼容旧字段
+
+    self.BorderModeDropdown = settingsTab:AddDropdown({
+        Name = "边框风格 Border",
+        Items = borderItems,
+        Default = (BorderModes[QuantumUI.BorderMode] and BorderModes[QuantumUI.BorderMode].DisplayName) or borderItems[2],
+        Callback = function(selected)
+            for k, m in pairs(BorderModes) do
+                if m.DisplayName == selected then
+                    self:SetBorderMode(k)
+                    break
+                end
+            end
+        end
+    })
+
+    self.BorderSpeedSlider = settingsTab:AddSlider({
+        Name = "边框速度",
         Min = 0.1,
         Max = 5,
         Default = QuantumUI.RainbowSpeed,
         Increment = 0.1,
-        Callback = function(value) QuantumUI.RainbowSpeed = value end
+        Callback = function(value) self:SetBorderSpeed(value) end
+    })
+    self.RainbowSpeedSlider = self.BorderSpeedSlider   -- 兼容旧字段
+
+    self.BorderThicknessSlider = settingsTab:AddSlider({
+        Name = "边框粗细",
+        Min = 1,
+        Max = 6,
+        Default = QuantumUI.BorderThickness or 2,
+        Callback = function(value) self:SetBorderThickness(value) end
+    })
+
+    settingsTab:AddLabel({
+        Text = "任意元素也能挂边框：Window:AddBorder(元素, {Mode=\"Rainbow\"})"
     })
     
     -- ═══════════════════════════════════════
@@ -6348,6 +6666,9 @@ QuantumUI.Internals = {
     StyleOrder   = StyleOrder,
     CornerState  = CornerState,
     resolveCorner = resolveCorner,
+    BorderModes  = BorderModes,
+    BorderOrder  = BorderOrder,
+    BorderEngine = BorderEngine,
     Mouse        = Mouse,
     LocalPlayer  = LocalPlayer,
     IsMobile     = IsMobile,

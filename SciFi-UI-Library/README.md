@@ -25,7 +25,7 @@
 - **7 Color Themes** - Cyan / Gold / Violet / Frost / Mono / Cyber / Sakura
 - **4 Visual Styles** - Sharp / Soft / Round / Glass (形状与质感层)
 - **6 Layouts** - Default / Rail / TopBar / Grid / Float / Vape
-- **Rainbow Gradient Borders** - Animated color-shifting borders
+- **5 Border Modes** - Solid / Rainbow / Aurora / Pulse / Neon (任意元素可挂)
 - **Smooth Animations** - Fluid transitions and effects
 - **Loading Animation** - Stunning startup sequence with sounds
 - **Theme Color System** - Real-time propagation to 30+ UI elements
@@ -457,6 +457,42 @@ Win:ApplyStyleToTree(Win.MainFrame)
 （`QBaseRadius` / `QFullRound`），方角模式 = `CornerRadius 0`。
 切换风格时遍历全树重算半径与描边，**不重建 UI**，所以控件状态零损耗。
 需要排除的元素加属性 `StyleExempt = true` 即可。
+
+### 🌈 边框风格 Border (v3.5)
+
+第 4 个可设置维度：**边框引擎 `BorderEngine`**，用一条 `RenderStepped`（节流 30fps）
+统一驱动所有已登记 `UIStroke` 的 `UIGradient`。
+
+| Mode | 效果 |
+|---|---|
+| `Solid` | 跟随主题色的静态描边 |
+| `Rainbow` | 7 色 HSV 环绕流动（原版彩虹边框） |
+| `Aurora` | 青 → 紫 → 粉 三色缓慢摆动，渐变角度轻微摇摆 |
+| `Pulse` | 主题色 + 白高光，明暗呼吸 |
+| `Neon` | 高光沿边框旋转扫光 |
+
+```lua
+-- 全局（Settings → 🌈 边框风格 Border 里也有下拉 + 速度 + 粗细）
+Win:SetBorderMode("Aurora")
+Win:SetBorderEnabled(true)
+Win:SetBorderSpeed(1.5)       -- 0.1 ~ 5
+Win:SetBorderThickness(3)     -- 1 ~ 6
+
+-- 给任意元素挂边框（面板 / 按钮 / 卡片都行）
+Win:AddBorder(SomeFrame, {Mode = "Rainbow", Thickness = 2, Transparency = 0.3})
+Win:AddRainbowBorder(SomeFrame)      -- 别名
+Win:RemoveBorder(SomeFrame)
+
+-- 批量：给某容器下所有 GuiObject 挂（filter 可选）
+Win:AddBorderToDescendants(Tab.Page, function(d) return d:IsA("Frame") end,
+    {Mode = "Neon"})
+```
+
+要点：
+- 边框 `UIStroke` 自动带 `StyleExempt = true`，不会被 Style 层的描边规则覆盖。
+- `FlatBorder`（Vape 布局）只决定**默认模式**（纯色）；一旦你在 Settings 里显式选过
+  边框风格，就一律尊重你的选择 —— Vape 也能开彩虹。
+- 边框偏好（模式/开关/速度/粗细）一起存进 `LayoutPrefs`。
 
 ### Theme System
 
