@@ -46,7 +46,7 @@ local SoundService      = game:GetService("SoundService")
 local LocalPlayer = Players.LocalPlayer
 
 local MusicUI = {}
-MusicUI.Version = "1.1.0"
+MusicUI.Version = "1.2.0"
 
 -- ═══════════════════════════════════════════════════════════════════
 --  美术资源槽位
@@ -2420,6 +2420,389 @@ function MusicUI.BindNetease(target, opts)
     local engine, err = MusicUI.neteaseEngine(ncm)
     if not engine then return nil, err end
     return MusicUI.BindEngine(target, engine, opts)
+end
+-- ══════════════════════════════════════════════════════════════════
+--  迷你播放条（v1.2）
+--    贴在屏幕边缘的细条播放器：默认半透明，鼠标悬停才变实，
+--    离开几秒后自动淡到几乎看不见 —— 保持在前台，但不挡视野/准星。
+--    拖拽可换位置，松手自动吸附到最近的边缘或角落。
+-- ══════════════════════════════════════════════════════════════════
+
+local DOCK_ANCHORS = {
+    Top         = { ax = 0.5, ay = 0, ox = 0,   oy = 46 },
+    Bottom      = { ax = 0.5, ay = 1, ox = 0,   oy = -16 },
+    TopLeft     = { ax = 0,   ay = 0, ox = 14,  oy = 46 },
+    TopRight    = { ax = 1,   ay = 0, ox = -14, oy = 46 },
+    BottomLeft  = { ax = 0,   ay = 1, ox = 14,  oy = -16 },
+    BottomRight = { ax = 1,   ay = 1, ox = -14, oy = -16 },
+}
+
+-- 按当前屏幕位置吸附到最近的锚点
+local function nearestDock(absPos, absSize)
+    local vp = workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize or Vector2.new(1280, 720)
+    local cx = absPos.X + absSize.X / 2
+    local cy = absPos.Y + absSize.Y / 2
+    local nearLeft = cx < vp.X * 0.33
+    local nearRight = cx > vp.X * 0.67
+    local nearTop = cy < vp.Y * 0.5
+    if nearTop then
+        if nearLeft then return "TopLeft" elseif nearRight then return "TopRight" else return "Top" end
+    end
+    if nearLeft then return "BottomLeft" elseif nearRight then return "BottomRight" else return "Bottom" end
+end
+
+local function buildMiniBar(host, opts)
+    opts = opts or {}
+    local self = {}
+    self.opts = opts
+    self.engine = nil
+    self.alive = true
+    self.dock = DOCK_ANCHORS[opts.Dock or "Top"] and (opts.Dock or "Top") or "Top"
+    self.idleAlpha = opts.IdleAlpha or 0.35      -- 常态透明度
+    self.hoverAlpha = opts.HoverAlpha or 0.02    -- 悬停透明度
+    self.awayAlpha = opts.AwayAlpha or 0.78      -- 长时间不用时的透明度
+    self.awayDelay = opts.AwayDelay or 4
+    self.volume = 0.6
+    self.len, self.pos = 0, 0
+    self.expanded = false
+    self._hoverUntil = 0
+
+    local H = opts.Height or 38
+    local W = opts.Width or 400
+    local accent = themeColor(Q, "Accent")
+
+    local root = Util.Create("Frame", {
+        Parent = host, Name = "MusicMiniBar",
+        BackgroundColor3 = themeColor(Q, "MainBg"),
+        BackgroundTransparency = self.idleAlpha,
+        BorderSizePixel = 0,
+        Size = UDim2.new(0, W, 0, H),
+        Active = true, ClipsDescendants = false, ZIndex = 60,
+    }, { Util.Create("UICorner", { CornerRadius = UDim.new(0, 10) }) })
+    self.frame = root
+
+    local stroke = Util.Create("UIStroke", {
+        Parent = root, Color = accent, Thickness = 1, Transparency = 0.55,
+    })
+    self.stroke = stroke
+
+    -- ── 封面 ────────────────────────────────────────────────────
+    local cover = Util.Create("Frame", {
+        Parent = root, BackgroundColor3 = themeColor(Q, "ControlAlt"),
+        BackgroundTransparency = 0.15, BorderSizePixel = 0,
+        Size = UDim2.new(0, H - 12, 0, H - 12),
+        Position = UDim2.new(0, 6, 0.5, 0),
+        AnchorPoint = Vector2.new(0, 0.5), ZIndex = 62,
+    }, { Util.Create("UICorner", { CornerRadius = UDim.new(0, 6) }) })
+    self.cover = cover
+    local coverImg = Util.Create("ImageLabel", {
+        Parent = cover, BackgroundTransparency = 1, BorderSizePixel = 0,
+        Size = UDim2.new(1, 0, 1, 0), Image = "", ZIndex = 63,
+        ImageTransparency = 0, ScaleType = Enum.ScaleType.Crop,
+    }, { Util.Create("UICorner", { CornerRadius = UDim.new(0, 6) }) })
+    self.coverImg = coverImg
+    self.coverIcon = makeIcon(cover, "Note", 16, accent, 64)
+
+    -- ── 文字 ────────────────────────────────────────────────────
+    local title = Util.Create("TextLabel", {
+        Parent = root, BackgroundTransparency = 1, BorderSizePixel = 0,
+        Size = UDim2.new(1, -200, 0, 15),
+        Position = UDim2.new(0, H - 2, 0, 6),
+        Font = Enum.Font.GothamMedium, Text = opts.EmptyText or "未在播放",
+        TextColor3 = themeColor(Q, "TextBright"), TextSize = 13,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        TextTruncate = Enum.TextTruncate.AtEnd, ZIndex = 62,
+    })
+    local sub = Util.Create("TextLabel", {
+        Parent = root, BackgroundTransparency = 1, BorderSizePixel = 0,
+        Size = UDim2.new(1, -200, 0, 13),
+        Position = UDim2.new(0, H - 2, 0, 20),
+        Font = Enum.Font.Gotham, Text = "",
+        TextColor3 = themeColor(Q, "TextFaint"), TextSize = 11,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        TextTruncate = Enum.TextTruncate.AtEnd, ZIndex = 62,
+    })
+    self.title, self.sub = title, sub
+
+    -- ── 进度线（贴底，可点/拖跳转） ──────────────────────────────
+    local track = Util.Create("Frame", {
+        Parent = root, BackgroundColor3 = themeColor(Q, "ControlHover"),
+        BackgroundTransparency = 0.35, BorderSizePixel = 0,
+        Size = UDim2.new(1, -20, 0, 3),
+        Position = UDim2.new(0, 10, 1, -5),
+        ZIndex = 63,
+    }, { Util.Create("UICorner", { CornerRadius = UDim.new(1, 0) }) })
+    local fill = Util.Create("Frame", {
+        Parent = track, BackgroundColor3 = accent,
+        BorderSizePixel = 0, Size = UDim2.new(0, 0, 1, 0), ZIndex = 64,
+    }, { Util.Create("UICorner", { CornerRadius = UDim.new(1, 0) }) })
+    self.track, self.fill = track, fill
+
+    -- ── 控制按钮 ────────────────────────────────────────────────
+    local function mkBtn(size, rightOffset, iconKey, iconSize)
+        local b = Util.Create("TextButton", {
+            Parent = root, BackgroundColor3 = Color3.fromRGB(255, 255, 255),
+            BackgroundTransparency = 1, BorderSizePixel = 0, Text = "",
+            Size = UDim2.new(0, size, 0, size),
+            Position = UDim2.new(1, rightOffset, 0.5, 0),
+            AnchorPoint = Vector2.new(0, 0.5), ZIndex = 64, AutoButtonColor = false,
+        }, { Util.Create("UICorner", { CornerRadius = UDim.new(0, 6) }) })
+        local ic = makeIcon(b, iconKey, iconSize or (size - 12), themeColor(Q, "TextDim"), 65)
+        b.MouseEnter:Connect(function()
+            snd("Hover", 0.08)
+            Util.Tween(b, { BackgroundTransparency = 0.85 }, 0.12)
+            paintIcon(ic, accent)
+        end)
+        b.MouseLeave:Connect(function()
+            Util.Tween(b, { BackgroundTransparency = 1 }, 0.12)
+            paintIcon(ic, themeColor(Q, "TextDim"))
+        end)
+        return b, ic
+    end
+
+    local btnClose = mkBtn(22, -6, "Close", 12)
+    local btnExpand = mkBtn(22, -30, "Queue", 12)
+    local btnVol = mkBtn(22, -54, "Volume", 13)
+    local btnNext = mkBtn(24, -80, "Next", 13)
+    local btnPlay = mkBtn(28, -108, "Play", 14)
+    local btnPrev = mkBtn(24, -138, "Prev", 13)
+    self.btnPlay, self.btnPlayIcon = btnPlay, nil
+
+    -- ── 交互：悬停变实 / 闲置淡出 ────────────────────────────────
+    local function wake()
+        self._hoverUntil = os.clock() + self.awayDelay
+        Util.Tween(root, { BackgroundTransparency = self.hoverAlpha }, 0.18)
+        Util.Tween(stroke, { Transparency = 0.15 }, 0.18)
+    end
+    local function settle()
+        self._hoverUntil = os.clock() + self.awayDelay
+        Util.Tween(root, { BackgroundTransparency = self.idleAlpha }, 0.25)
+        Util.Tween(stroke, { Transparency = 0.55 }, 0.25)
+    end
+    root.MouseEnter:Connect(wake)
+    root.MouseLeave:Connect(settle)
+
+    task.spawn(function()
+        while self.alive do
+            task.wait(0.5)
+            if os.clock() > self._hoverUntil and root.BackgroundTransparency < self.awayAlpha - 0.01 then
+                Util.Tween(root, { BackgroundTransparency = self.awayAlpha }, 0.6)
+                Util.Tween(stroke, { Transparency = 0.85 }, 0.6)
+            end
+        end
+    end)
+
+    -- ── 进度跳转 ────────────────────────────────────────────────
+    local dragging = false
+    local function seekFromInput(px)
+        if not self.engine or self.len <= 0 then return end
+        local abs = track.AbsolutePosition.X
+        local w = math.max(1, track.AbsoluteSize.X)
+        local r = math.clamp((px - abs) / w, 0, 1)
+        self.engine.Seek(r * self.len)
+        fill.Size = UDim2.new(r, 0, 1, 0)
+    end
+    track.InputBegan:Connect(function(i)
+        if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
+            dragging = true
+            seekFromInput(i.Position.X)
+        end
+    end)
+    track.InputEnded:Connect(function(i)
+        if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
+            dragging = false
+        end
+    end)
+    UserInputService.InputChanged:Connect(function(i)
+        if dragging and (i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch) then
+            seekFromInput(i.Position.X)
+        end
+    end)
+    self._seekFromInput = seekFromInput
+
+    -- ── 滚轮调音量（不占任何 UI） ────────────────────────────────
+    local function onWheel(i)
+        if i.UserInputType ~= Enum.UserInputType.MouseWheel then return end
+        local v = math.clamp(self.volume + (i.Position.Z > 0 and 0.05 or -0.05), 0, 1)
+        self:SetVolume(v)
+        if self.engine then self.engine.SetVolume(v) end
+    end
+    root.InputChanged:Connect(onWheel)
+    for _, b in ipairs({ btnPlay, btnPrev, btnNext, btnVol, btnExpand, btnClose }) do
+        b.InputChanged:Connect(onWheel)
+    end
+
+    -- ── 拖拽 + 吸附 ─────────────────────────────────────────────
+    local dragStart, startPos = nil, nil
+    root.InputBegan:Connect(function(i)
+        if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
+            dragStart = i.Position
+            startPos = Vector2.new(root.AbsolutePosition.X, root.AbsolutePosition.Y)
+        end
+    end)
+    UserInputService.InputChanged:Connect(function(i)
+        if not dragStart then return end
+        if i.UserInputType ~= Enum.UserInputType.MouseMovement and i.UserInputType ~= Enum.UserInputType.Touch then return end
+        local d = i.Position - dragStart
+        if math.abs(d.X) + math.abs(d.Y) < 4 then return end
+        root.AnchorPoint = Vector2.new(0, 0)
+        root.Position = UDim2.new(0, startPos.X + d.X, 0, startPos.Y + d.Y)
+        self.dock = nil
+    end)
+    UserInputService.InputEnded:Connect(function(i)
+        if i.UserInputType ~= Enum.UserInputType.MouseButton1 and i.UserInputType ~= Enum.UserInputType.Touch then return end
+        if dragStart and self.dock == nil then
+            local d = i.Position - dragStart
+            if math.abs(d.X) + math.abs(d.Y) > 4 then
+                self:SetDock(nearestDock(root.AbsolutePosition, root.AbsoluteSize))
+            end
+        end
+        dragStart = nil
+    end)
+
+    -- ── 按钮接线 ────────────────────────────────────────────────
+    btnPlay.MouseButton1Click:Connect(function()
+        snd("Click", 0.12)
+        if self.engine then self.engine.Toggle() end
+    end)
+    btnPrev.MouseButton1Click:Connect(function() snd("Click", 0.12) if self.engine then self.engine.Prev() end end)
+    btnNext.MouseButton1Click:Connect(function() snd("Click", 0.12) if self.engine then self.engine.Next() end end)
+    btnVol.MouseButton1Click:Connect(function()
+        snd("Click", 0.12)
+        self.volume = (self.volume > 0.01) and 0 or 0.6
+        if self.engine then self.engine.SetVolume(self.volume) end
+        btnVol:ClearAllChildren()
+        Util.Create("UICorner", { Parent = btnVol, CornerRadius = UDim.new(0, 6) })
+        makeIcon(btnVol, self.volume > 0.01 and "Volume" or "Mute", 13, themeColor(Q, "TextDim"), 65)
+    end)
+    btnExpand.MouseButton1Click:Connect(function()
+        snd("Click", 0.12)
+        if opts.OnExpand then opts.OnExpand(self) end
+    end)
+    btnClose.MouseButton1Click:Connect(function()
+        snd("Click", 0.12)
+        self:Hide()
+        if opts.OnClose then opts.OnClose(self) end
+    end)
+
+    -- ── 对外方法 ────────────────────────────────────────────────
+    function self:SetDock(name)
+        local a = DOCK_ANCHORS[name]
+        if not a then return end
+        self.dock = name
+        root.AnchorPoint = Vector2.new(a.ax, a.ay)
+        Util.Tween(root, { Position = UDim2.new(a.ax, a.ox, a.ay, a.oy) }, 0.22)
+    end
+
+    function self:SetWidth(w)
+        W = w
+        root.Size = UDim2.new(0, w, 0, H)
+        title.Size = UDim2.new(1, -200, 0, 15)
+        sub.Size = UDim2.new(1, -200, 0, 13)
+    end
+
+    function self:SetSong(song)
+        song = song or {}
+        title.Text = song.Title or song.title or opts.EmptyText or "未在播放"
+        sub.Text = song.Artist or song.artist or ""
+        local coverSrc = song.Cover or song.cover
+        if type(coverSrc) == "string" and coverSrc ~= "" then
+            coverImg.Image = coverSrc
+            coverImg.Visible = true
+            self.coverIcon.Visible = false
+        else
+            coverImg.Visible = false
+            self.coverIcon.Visible = true
+        end
+    end
+
+    function self:SetPlaying(on)
+        self.playing = on and true or false
+        btnPlay:ClearAllChildren()
+        Util.Create("UICorner", { Parent = btnPlay, CornerRadius = UDim.new(0, 6) })
+        makeIcon(btnPlay, self.playing and "Pause" or "Play", 14, themeColor(Q, "TextBright"), 65)
+        fill.BackgroundColor3 = self.playing and themeColor(Q, "Accent") or themeColor(Q, "TextFaint")
+    end
+
+    function self:SetProgress(pos, len)
+        self.pos, self.len = pos or 0, len or 0
+        local r = (self.len > 0) and math.clamp(self.pos / self.len, 0, 1) or 0
+        if not dragging then fill.Size = UDim2.new(r, 0, 1, 0) end
+    end
+
+    function self:SetVolume(v)
+        self.volume = math.clamp(v or 0, 0, 1)
+    end
+
+    function self:Show() root.Visible = true end
+    function self:Hide() root.Visible = false end
+    function self:IsVisible() return root.Visible end
+    function self:Toggle() root.Visible = not root.Visible end
+    function self:GetFrame() return root end
+
+    function self:Destroy()
+        self.alive = false
+        pcall(function() root:Destroy() end)
+    end
+
+    -- ── 接标准后端 ──────────────────────────────────────────────
+    function self:Bind(engine, bopts)
+        self.engine = engine
+        bopts = bopts or {}
+        if bopts.Volume then self:SetVolume(bopts.Volume) engine.SetVolume(self.volume) end
+        self:SetDock(self.dock or "Top")
+        task.spawn(function()
+            local lastId, lastStatus = nil, nil
+            while self.alive do
+                task.wait(bopts.PollInterval or 0.25)
+                local ok, st = pcall(function() return engine.GetState() end)
+                if ok and st then
+                    self:SetPlaying(st.playing)
+                    self:SetProgress(st.pos, st.len)
+                    local song = st.song
+                    if song and song.id ~= lastId then
+                        lastId = song.id
+                        self:SetSong({ Title = song.name, Artist = song.artist,
+                                       Cover = song.cover })
+                    elseif not song and lastId ~= "none" then
+                        lastId = "none"
+                        self:SetSong({})
+                    end
+                    if st.status ~= lastStatus then
+                        lastStatus = st.status
+                        if st.status and st.status ~= "" then sub.Text = st.status end
+                    end
+                end
+            end
+        end)
+        return self
+    end
+
+    function self:BindNetease(bopts)
+        local g = (getgenv and getgenv()) or _G
+        local ncm = g and g.NCM
+        if not ncm then return nil, "getgenv().NCM 不存在：先加载 netease-engine.lua" end
+        local eng, err = MusicUI.neteaseEngine(ncm)
+        if not eng then return nil, err end
+        return self:Bind(eng, bopts)
+    end
+
+    self:SetPlaying(false)
+    self:SetDock(self.dock)
+    root.Visible = (opts.Visible ~= false)
+    return self
+end
+
+-- 用法：MusicUI.CreateMiniBar(QuantumUI, { Dock = "Top", Width = 400 })
+--       MusicUI.CreateMiniBar({ Dock = "Bottom" })   -- 不传实例则用 Q.ScreenGui
+function MusicUI.CreateMiniBar(a, b)
+    local cls, opts
+    if type(a) == "table" and (a.ScreenGui or a.MainFrame) then cls, opts = a, (b or {})
+    else cls, opts = Q, (a or {}) end
+    local host = opts.Parent or (cls and cls.ScreenGui)
+    if not host then return nil, "找不到宿主 ScreenGui：先创建 QuantumUI 窗口，或用 opts.Parent 指定" end
+    if cls and cls ~= Q then bindInternals(cls) end
+    return buildMiniBar(host, opts)
 end
 function MusicUI.Attach(cls)
     if type(cls) ~= "table" then
