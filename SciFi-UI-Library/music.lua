@@ -2460,12 +2460,14 @@ local function buildMiniBar(host, opts)
     self.dock = DOCK_ANCHORS[opts.Dock or "Top"] and (opts.Dock or "Top") or "Top"
     self.idleAlpha = opts.IdleAlpha or 0.35      -- 常态透明度
     self.hoverAlpha = opts.HoverAlpha or 0.02    -- 悬停透明度
-    self.awayAlpha = opts.AwayAlpha or 0.78      -- 长时间不用时的透明度
-    self.awayDelay = opts.AwayDelay or 4
+    self.awayAlpha = opts.AwayAlpha or 0.62      -- 长时间不用时的透明度（还要能看清歌名）
+    self.awayDelay = opts.AwayDelay or 5
     self.volume = 0.6
     self.len, self.pos = 0, 0
+    self.artist, self.status = "", nil
     self.expanded = false
-    self._hoverUntil = 0
+    -- 初始化时先按「常态」显示一个 awayDelay，不要一创建就淡到最淡
+    self._hoverUntil = os.clock() + self.awayDelay
 
     local H = opts.Height or 38
     local W = opts.Width or 400
@@ -2701,10 +2703,25 @@ local function buildMiniBar(host, opts)
         sub.Size = UDim2.new(1, -200, 0, 13)
     end
 
+    -- 状态文案（缓冲中/取直链失败…）单独走，不覆盖歌手名
+    function self:SetStatus(s)
+        self.status = s
+        if type(s) == "string" and s ~= "" then
+            sub.Text = s
+            sub.TextColor3 = themeColor(Q, "Accent")
+        else
+            sub.Text = self.artist or ""
+            sub.TextColor3 = themeColor(Q, "TextFaint")
+        end
+    end
+
     function self:SetSong(song)
         song = song or {}
         title.Text = song.Title or song.title or opts.EmptyText or "未在播放"
-        sub.Text = song.Artist or song.artist or ""
+        self.artist = song.Artist or song.artist or ""
+        if not (type(self.status) == "string" and self.status ~= "") then
+            sub.Text = self.artist
+        end
         local coverSrc = song.Cover or song.cover
         if type(coverSrc) == "string" and coverSrc ~= "" then
             coverImg.Image = coverSrc
@@ -2770,7 +2787,7 @@ local function buildMiniBar(host, opts)
                     end
                     if st.status ~= lastStatus then
                         lastStatus = st.status
-                        if st.status and st.status ~= "" then sub.Text = st.status end
+                        self:SetStatus(st.status)
                     end
                 end
             end
