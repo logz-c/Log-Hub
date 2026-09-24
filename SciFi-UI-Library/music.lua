@@ -2293,6 +2293,14 @@ local function buildMusicPanel(host, opts)
     }, { Util.Create("UICorner", { CornerRadius = UDim.new(1, 0) }) })
     local function selectTab(name)
         self.tab = name
+        -- 首次打开「我喜欢的」自动拉云端红心
+        if name == "我喜欢的" and #self.liked == 0 and not self._likedLoading then
+            self._likedLoading = true
+            task.spawn(function()
+                if self.LoadLiked then self:LoadLiked() end
+                self._likedLoading = false
+            end)
+        end
         for i, n in ipairs(TABS) do
             local b = tabButtons[i]
             if b then
@@ -2627,7 +2635,7 @@ local function buildMusicPanel(host, opts)
         end
         if bopts.Volume then self:SetVolume(bopts.Volume) engine.SetVolume(self.volume) end
         task.spawn(function()
-            local lastId, lastTab = nil, nil
+            local lastId, lastTab, lyricMiss = nil, nil, nil
             while self.alive do
                 task.wait(bopts.PollInterval or 0.25)
                 local ok, st = pcall(function() return engine.GetState() end)
@@ -2639,9 +2647,16 @@ local function buildMusicPanel(host, opts)
                         lastId = song.id
                         self.current = { Id = song.id, Title = song.name, Sub = song.artist }
                         self:SetSong({ Title = song.name, Artist = song.artist, Cover = song.cover })
+                        -- 歌词是「下载完才开始拉」的，此刻多半还没回来，标记待补拉
                         self.lyricLines = engine.Lyric and engine.Lyric() or nil
+                        lyricMiss = self.lyricLines and nil or 0
                         if self.tab == "歌词" then self:Refresh() end
                         if self.miniBar then self.miniBar:Wake() end
+                    elseif song and not self.lyricLines and (lyricMiss or 0) < 30 then
+                        -- 补拉歌词（最多 30 次 ≈ 7.5s，够下载+解析了）
+                        lyricMiss = (lyricMiss or 0) + 1
+                        self.lyricLines = engine.Lyric and engine.Lyric() or nil
+                        if self.lyricLines and self.tab == "歌词" then self:Refresh() end
                     end
                     -- 歌词高亮
                     if self.tab == "歌词" and self.lyricLabels and engine.LyricAt then
