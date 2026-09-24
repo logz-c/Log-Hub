@@ -1422,7 +1422,7 @@ pcall(function()
 
         -- 本地收藏（与云端红心无关）
         FavList   = function() return Fav.list end,
-        FavHas    = function(id) return Fav.has({ id = id }) end,
+        FavHas    = function(id) return Fav.has(id) end,
         FavToggle = function(song) return Fav.toggle(song) end,
     }
     print("[NCM] 引擎已导出到 getgenv().NCM（" .. (HEADLESS and "Headless" or "带 UI") .. " 模式）")
