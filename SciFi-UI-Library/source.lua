@@ -45,7 +45,8 @@ QuantumUI.BorderEnabled = nil     -- nil = 跟随 RainbowEnabled；显式 true/f
 QuantumUI.BorderMode = "Rainbow"  -- Solid / Rainbow / Aurora / Pulse / Neon
 QuantumUI.BorderThickness = 2
 QuantumUI.Instance = nil  -- 单例：防止重复注入
-QuantumUI.Assets = CustomAssets
+-- 注意：QuantumUI.Assets = CustomAssets 不能写在这里 —— CustomAssets 的 local
+-- 声明在文件下方，提前引用会静默变成全局 nil。它的导出放在 CustomAssets 声明之后。
 QuantumUI.RainbowColors = {
     Color3.fromRGB(255, 0, 0),
     Color3.fromRGB(255, 127, 0),
@@ -189,7 +190,8 @@ QuantumUI.LayoutDisplay = LayoutDisplay
 QuantumUI.LayoutOrder = LayoutOrder
 QuantumUI.Styles = Styles
 QuantumUI.StyleOrder = StyleOrder
-QuantumUI.CornerState = CornerState
+-- 注意：CornerState 的 local 声明在文件下方（VISUAL STYLE ENGINE 段），
+-- 在这里引用会变成全局 nil（Lua 前向引用陷阱），所以它的导出放在声明处。
 QuantumUI.StyleDisplay = setmetatable({}, {
     __index = function(_, k)
         local s = Styles[k]
@@ -482,6 +484,8 @@ local CustomAssets = {
     IconWorld      = "rbxassetid://PENDING_ICON_WORLD",
 }
 
+QuantumUI.Assets = CustomAssets   -- 必须在 CustomAssets 声明之后（前向引用会变 nil）
+
 local Sounds = {
     Click = "rbxassetid://6895079853",
     Hover = "rbxassetid://6895079709",
@@ -507,6 +511,9 @@ local CornerState = {
     Scale     = 0,      -- Radius / 8
     FullRound = false,  -- 原本是 UDim.new(1,0) 的元素是否保持全圆
 }
+
+-- 在这里导出（必须紧跟声明，不能在文件上方的导出区提前引用）
+QuantumUI.CornerState = CornerState
 
 local MAX_RADIUS = 28
 
