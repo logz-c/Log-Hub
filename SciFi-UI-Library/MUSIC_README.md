@@ -211,18 +211,30 @@ MW:SetTitle("…")  MW:SetSize(…)  MW:SetPosition(…)  MW:Destroy()
 
 ## 四、美术资源
 
-**默认零外部资源** —— 所有图标都是代码绘制：矩形 + 45° 旋转矩形被 `ClipsDescendants`
-容器裁成三角，方角风格（`USE_SQUARE_CORNERS`）下同样好看，且能通过 `paintIcon` 跟随主题换色。
+**双轨：已上传贴图（默认）+ 代码绘制（兜底）**
+
+20 张图标已上传到 Roblox（白色图形 + 透明底，可被 `ImageColor3` 染色跟随主题），
+ID 写在 `music.lua` 顶部的 `UPLOADED` 表里，**默认就生效**，不需要任何配置：
+
+```lua
+local MusicUI = loadstring(game:HttpGet(MUSIC_URL))()(QuantumUI)  -- 直接是贴图版
+```
+
+| 开关 | 作用 |
+|---|---|
+| `MusicUI.UseDrawnIcons()` | 切回**代码绘制**图标（零资源、离线可用、不怕资产被删） |
+| `MusicUI.UseUploadedIcons()` | 切回上传贴图 |
+| `MusicUI.Assets.Play = "rbxassetid://…"` | 单独换某一张 |
+
+槽位一旦是 `rbxassetid://…`，`makeIcon` 就用 `ImageLabel`；留空则回退到绘制图标。
+`Cover` 是彩色图（深紫渐变 + 音符），由 `makeCover` 处理，**不会被 `ImageColor3` 染色**。
+
+代码绘制版的原理：矩形 + 45° 旋转矩形被 `ClipsDescendants` 容器裁成三角，
+方角风格下同样好看，`paintIcon` 递归改子 Frame 的 `BackgroundColor3` 实现换色。
 内置：`Play Pause Prev Next Shuffle Repeat RepeatOne Heart HeartOn Search Clear Volume Mute
 Queue Note Close Plus Trash Up Down`。
 
-想换成自己上传的贴图，改 `MusicUI.Assets` 即可（控件自动从绘制图标切换成 `ImageLabel`）：
-
-```lua
-MusicUI.Assets.Play    = "rbxassetid://123456789"
-MusicUI.Assets.HeartOn = "rbxassetid://123456790"
-MusicUI.Assets.Cover   = "rbxassetid://…"   -- 默认封面占位图
-MusicUI.Assets.Bg      = "rbxassetid://…"   -- 音乐页背景（可用主库 ui_assets/bg_panel.jpg）
-```
-
 `MusicUI.Draw.Tri(parent, w, h, color, z, rot, cx, cy)` 也可单独调用来自绘三角。
+
+完整 Asset ID 清单与「改形状 → 重新上传」的流程见
+[`../ui_assets/icons/README.md`](../ui_assets/icons/README.md)。

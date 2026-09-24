@@ -1,57 +1,74 @@
 # Quantum UI — 图标贴图包
 
-20 张 256×256 PNG，**白色图形 + 透明底**，上传到 Roblox 后可以用
-`ImageColor3` 任意染色（跟随主题/风格/hover 状态）。
+20 张 256×256 PNG，**白色图形 + 透明底**，已上传到 Roblox，可被 `ImageColor3`
+任意染色（跟随主题 / 视觉风格 / hover 状态）。
 
-由 `_gen_icons.py`（工作区）生成：64×64 设计网格，4× 超采样后缩到 256，边缘抗锯齿。
-要改形状就改那个脚本再重跑，别手改 PNG。
+由 `_gen_icons.py`（工作区）生成：64×64 设计网格 → 4× 超采样 → LANCZOS 缩到 256。
+要改形状就改脚本再重跑、重传，别手改 PNG。
 
-## 文件 → MusicUI.Assets 槽位对照
+## 已上传的 Asset ID
 
-| 文件 | 槽位 | 用途 |
+`music.lua` 里的 `UPLOADED` 表就是这份清单（默认已启用，开箱即用）：
+
+| 文件 | Asset ID | `MusicUI.Assets` 槽位 |
 |---|---|---|
-| `play.png` | `MusicUI.Assets.Play` | 播放 |
-| `pause.png` | `MusicUI.Assets.Pause` | 暂停 |
-| `prev.png` | `MusicUI.Assets.Prev` | 上一首 |
-| `next.png` | `MusicUI.Assets.Next` | 下一首 |
-| `shuffle.png` | `MusicUI.Assets.Shuffle` | 随机播放 |
-| `repeat.png` | `MusicUI.Assets.Repeat` | 列表循环 |
-| `repeat_one.png` | `MusicUI.Assets.RepeatOne` | 单曲循环 |
-| `heart.png` | `MusicUI.Assets.Heart` / `.HeartOn` | 收藏（选中态靠染色区分） |
-| `search.png` | `MusicUI.Assets.Search` | 搜索 |
-| `clear.png` | `MusicUI.Assets.Clear` | 清空输入（圆圈+叉） |
-| `close.png` | `MusicUI.Assets.Close` | 关闭窗口（纯叉） |
-| `volume.png` | `MusicUI.Assets.Volume` | 音量 |
-| `mute.png` | `MusicUI.Assets.Mute` | 静音 |
-| `queue.png` | `MusicUI.Assets.Queue` | 队列 / 列表 |
-| `note.png` | `MusicUI.Assets.Note` | 音符占位 |
-| `plus.png` | `MusicUI.Assets.Plus` | 添加 / 更多 |
-| `trash.png` | `MusicUI.Assets.Trash` | 删除 |
-| `arrow_up.png` | `MusicUI.Assets.Up` | 上移 |
-| `arrow_down.png` | `MusicUI.Assets.Down` | 下移 |
-| `cover_placeholder.png` | `MusicUI.Assets.Cover` | 默认封面（自带深紫渐变底，**不要染色**） |
+| `play.png` | `rbxassetid://114740604284026` | `Play` |
+| `pause.png` | `rbxassetid://111792844682744` | `Pause` |
+| `prev.png` | `rbxassetid://84496266493568` | `Prev` |
+| `next.png` | `rbxassetid://84698543566466` | `Next` |
+| `shuffle.png` | `rbxassetid://97719146198787` | `Shuffle` |
+| `repeat.png` | `rbxassetid://104289200437812` | `Repeat` |
+| `repeat_one.png` | `rbxassetid://105576549727493` | `RepeatOne` |
+| `heart.png` | `rbxassetid://75603968806920` | `Heart` / `HeartOn` |
+| `search.png` | `rbxassetid://80913948633532` | `Search` |
+| `clear.png` | `rbxassetid://81810251029618` | `Clear`（圆圈+叉） |
+| `close.png` | `rbxassetid://77309987267353` | `Close`（纯叉） |
+| `volume.png` | `rbxassetid://102533846914077` | `Volume` |
+| `mute.png` | `rbxassetid://105301103725420` | `Mute` |
+| `queue.png` | `rbxassetid://72337420724977` | `Queue` |
+| `note.png` | `rbxassetid://111780610859716` | `Note` |
+| `plus.png` | `rbxassetid://122564974827162` | `Plus` |
+| `trash.png` | `rbxassetid://109916746890494` | `Trash` |
+| `arrow_up.png` | `rbxassetid://100978389702505` | `Up` |
+| `arrow_down.png` | `rbxassetid://84206135890973` | `Down` |
+| `cover_placeholder.png` | `rbxassetid://128130074289760` | `Cover`（彩色，**不染色**） |
 
-## 上传后怎么用
+## 用法
 
-把下面这段贴到加载 music.lua 之后（ID 换成真实上传结果）：
+默认就走上传贴图，不用配任何东西：
 
 ```lua
-local ID = {
-    Play = 0, Pause = 0, Prev = 0, Next = 0,
-    Shuffle = 0, Repeat = 0, RepeatOne = 0,
-    Heart = 0, HeartOn = 0, Search = 0, Clear = 0,
-    Close = 0, Volume = 0, Mute = 0, Queue = 0,
-    Note = 0, Plus = 0, Trash = 0, Up = 0, Down = 0,
-    Cover = 0,
-}
-for k, v in pairs(ID) do
-    if v ~= 0 then
-        MusicUI.Assets[k] = "rbxassetid://" .. tostring(v)
-    end
-end
+local MusicUI = loadstring(game:HttpGet(MUSIC_URL))()(QuantumUI)
 ```
 
-槽位一旦填了 `rbxassetid://…`，`makeIcon` 就会自动从「代码绘制」切换成 `ImageLabel`，
-不需要改任何控件代码。留空则继续用内置绘制图标（零资源、离线可用）。
+想切回内置「代码绘制」图标（零资源、离线可用）：
 
-> 注意 `Cover` 是彩色图，`makeIcon` 之外由 `makeCover` 处理，**不会被 ImageColor3 染色**。
+```lua
+MusicUI.UseDrawnIcons()
+```
+
+切回来：
+
+```lua
+MusicUI.UseUploadedIcons()
+```
+
+单独换某一张：
+
+```lua
+MusicUI.Assets.Play = "rbxassetid://你的ID"
+```
+
+槽位一旦是 `rbxassetid://…`，`makeIcon` 就用 `ImageLabel`；留空则回退到绘制图标。
+`Cover` 是彩色图，由 `makeCover` 处理，**不会被 `ImageColor3` 染色**。
+
+## 重新上传
+
+改完 `_gen_icons.py` 重跑后，用工作区的上传脚本（走 Roblox Studio 官方 MCP）：
+
+```bash
+# 1. 在 icons 目录起本地 HTTP 服务（StudioMCP 只能从 http 拉图）
+cd Log-Hub/ui_assets/icons && python -m http.server 8731 --bind 127.0.0.1
+# 2. 批量上传，结果写到 asset_id_map.json
+python _upload_icons.py
+```

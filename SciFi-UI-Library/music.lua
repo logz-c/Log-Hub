@@ -49,32 +49,50 @@ local MusicUI = {}
 MusicUI.Version = "1.0.0"
 
 -- ═══════════════════════════════════════════════════════════════════
---  美术资源槽位：填 "rbxassetid://…" 覆盖；留空 = 使用内置绘制图标
+--  美术资源槽位
+--  UPLOADED = 已上传到 Roblox 的贴图（白色图形 + 透明底，可被 ImageColor3 染色，
+--  跟随主题/风格/hover 状态换色）。留空 "" 会回退到内置「代码绘制」图标。
+--    · 整体切回绘制版：MusicUI.UseDrawnIcons()
+--    · 恢复上传版：    MusicUI.UseUploadedIcons()
+--    · 换自己的图：    MusicUI.Assets.Play = "rbxassetid://123456789"
 -- ═══════════════════════════════════════════════════════════════════
-MusicUI.Assets = {
-    Play      = "",
-    Pause     = "",
-    Prev      = "",
-    Next      = "",
-    Shuffle   = "",
-    Repeat    = "",
-    RepeatOne = "",
-    Heart     = "",
-    HeartOn   = "",
-    Search    = "",
-    Clear     = "",
-    Volume    = "",
-    Mute      = "",
-    Queue     = "",
-    Note      = "",
-    Close     = "",
-    Plus      = "",
-    Trash     = "",
-    Up        = "",
-    Down      = "",
-    Cover     = "",   -- 默认封面（留空 = 绘制音符占位）
-    Bg        = "",   -- 音乐页背景图（留空 = 纯色）
+local UPLOADED = {
+    Play      = "rbxassetid://114740604284026",
+    Pause     = "rbxassetid://111792844682744",
+    Prev      = "rbxassetid://84496266493568",
+    Next      = "rbxassetid://84698543566466",
+    Shuffle   = "rbxassetid://97719146198787",
+    Repeat    = "rbxassetid://104289200437812",
+    RepeatOne = "rbxassetid://105576549727493",
+    Heart     = "rbxassetid://75603968806920",
+    HeartOn   = "rbxassetid://75603968806920",
+    Search    = "rbxassetid://80913948633532",
+    Clear     = "rbxassetid://81810251029618",
+    Volume    = "rbxassetid://102533846914077",
+    Mute      = "rbxassetid://105301103725420",
+    Queue     = "rbxassetid://72337420724977",
+    Note      = "rbxassetid://111780610859716",
+    Close     = "rbxassetid://77309987267353",
+    Plus      = "rbxassetid://122564974827162",
+    Trash     = "rbxassetid://109916746890494",
+    Up        = "rbxassetid://100978389702505",
+    Down      = "rbxassetid://84206135890973",
+    Cover     = "rbxassetid://128130074289760",   -- 彩色默认封面，不染色
+    Bg        = "",                                -- 音乐页背景图（留空 = 纯色）
 }
+
+MusicUI.Assets = {}
+for k, v in pairs(UPLOADED) do MusicUI.Assets[k] = v end
+
+-- 一键切回「代码绘制」图标（离线 / 不依赖上传资产时用）
+function MusicUI.UseDrawnIcons()
+    for k in pairs(MusicUI.Assets) do MusicUI.Assets[k] = "" end
+end
+
+-- 一键恢复上传贴图
+function MusicUI.UseUploadedIcons()
+    for k, v in pairs(UPLOADED) do MusicUI.Assets[k] = v end
+end
 
 -- ═══════════════════════════════════════════════════════════════════
 --  内部工具：优先复用主库 Utility，缺失时用精简兜底实现
