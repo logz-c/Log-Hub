@@ -46,7 +46,7 @@ local SoundService      = game:GetService("SoundService")
 local LocalPlayer = Players.LocalPlayer
 
 local MusicUI = {}
-MusicUI.Version = "1.2.0"
+MusicUI.Version = "1.3.0"
 
 -- ═══════════════════════════════════════════════════════════════════
 --  美术资源槽位
@@ -2049,8 +2049,662 @@ end
 
 -- ═══════════════════════════════════════════════════════════════════
 --  Window:CreateMusicWindow(opts) —— 独立浮动音乐窗口
--- ═══════════════════════════════════════════════════════════════════
+-- ══════════════════════════════════════════════════════════════════
+--  悬浮式音乐主窗口（v1.3）
+--    与迷你播放条同一套视觉语言：半透明圆角面板 + 细描边 + 小尺寸图标键
+--    + GothamMedium 13 / Gotham 11 字号 + 2~3px 细进度条。
+--    自带 播放控制 / 搜索 / 分类 / 歌曲列表 / 队列 / 歌词，可直接 :Bind(engine)。
+-- ══════════════════════════════════════════════════════════════════
+
+-- 通用细滑块（进度条 / 音量条共用）
+local function mkSlider(parent, o)
+    o = o or {}
+    local accent = themeColor(Q, "Accent")
+    local track = Util.Create("Frame", {
+        Parent = parent, BackgroundColor3 = themeColor(Q, "ControlHover"),
+        BackgroundTransparency = 0.3, BorderSizePixel = 0,
+        Size = o.Size or UDim2.new(1, 0, 0, 3),
+        Position = o.Position or UDim2.new(0, 0, 0, 0),
+        ZIndex = o.ZIndex or 20,
+    }, { Util.Create("UICorner", { CornerRadius = UDim.new(1, 0) }) })
+    local fill = Util.Create("Frame", {
+        Parent = track, BackgroundColor3 = accent, BorderSizePixel = 0,
+        Size = UDim2.new(o.Ratio or 0, 0, 1, 0), ZIndex = (o.ZIndex or 20) + 1,
+    }, { Util.Create("UICorner", { CornerRadius = UDim.new(1, 0) }) })
+    -- 加宽热区，细条也好点
+    local hit = Util.Create("TextButton", {
+        Parent = parent, BackgroundTransparency = 1, Text = "",
+        Size = o.HitSize or UDim2.new(1, 0, 0, 14),
+        Position = o.Position and UDim2.new(o.Position.X.Scale, o.Position.X.Offset,
+                                            o.Position.Y.Scale, o.Position.Y.Offset - 6)
+                                or UDim2.new(0, 0, 0, -6),
+        ZIndex = (o.ZIndex or 20) + 2, AutoButtonColor = false,
+    })
+    local api = { track = track, fill = fill, hit = hit, ratio = o.Ratio or 0 }
+    function api:SetRatio(r)
+        r = math.clamp(r or 0, 0, 1)
+        self.ratio = r
+        fill.Size = UDim2.new(r, 0, 1, 0)
+    end
+    local dragging = false
+    local function fromX(px)
+        local w = math.max(1, track.AbsoluteSize.X)
+        local r = math.clamp((px - track.AbsolutePosition.X) / w, 0, 1)
+        api:SetRatio(r)
+        if o.OnChange then o.OnChange(r) end
+    end
+    hit.InputBegan:Connect(function(i)
+        if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
+            dragging = true fromX(i.Position.X)
+        end
+    end)
+    hit.InputEnded:Connect(function(i)
+        if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
+            dragging = false
+        end
+    end)
+    UserInputService.InputChanged:Connect(function(i)
+        if dragging and (i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch) then
+            fromX(i.Position.X)
+        end
+    end)
+    return api
+end
+
+-- 小图标键：anchor 右侧时 off 表示「右边缘距父级右边多少」
+local function mkIconButton(parent, size, off, iconKey, iconSize, anchorRight, z)
+    local accent = themeColor(Q, "Accent")
+    local b = Util.Create("TextButton", {
+        Parent = parent, BackgroundColor3 = Color3.fromRGB(255, 255, 255),
+        BackgroundTransparency = 1, BorderSizePixel = 0, Text = "",
+        Size = UDim2.new(0, size, 0, size),
+        Position = anchorRight and UDim2.new(1, off, 0.5, 0) or UDim2.new(0, off, 0.5, 0),
+        AnchorPoint = anchorRight and Vector2.new(1, 0.5) or Vector2.new(0, 0.5),
+        ZIndex = z or 30, AutoButtonColor = false,
+    }, { Util.Create("UICorner", { CornerRadius = UDim.new(0, 6) }) })
+    local ic = makeIcon(b, iconKey, iconSize or (size - 10), themeColor(Q, "TextDim"), (z or 30) + 1)
+    b.MouseEnter:Connect(function()
+        snd("Hover", 0.08)
+        Util.Tween(b, { BackgroundTransparency = 0.85 }, 0.12)
+        paintIcon(ic, accent)
+    end)
+    b.MouseLeave:Connect(function()
+        Util.Tween(b, { BackgroundTransparency = 1 }, 0.12)
+        paintIcon(ic, themeColor(Q, "TextDim"))
+    end)
+    return b, ic
+end
+
+-- ── 主构建 ──────────────────────────────────────────────────────
+local function buildMusicPanel(host, opts)
+    opts = opts or {}
+    local accent = themeColor(Q, "Accent")
+    local vp = (workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize) or Vector2.new(1280, 720)
+    local W = math.min(opts.Size and opts.Size.X.Offset or 380, math.max(300, math.floor(vp.X * 0.92)))
+    local H = math.min(opts.Size and opts.Size.Y.Offset or 520, math.max(320, math.floor(vp.Y * 0.86)))
+
+    local panel = Util.Create("Frame", {
+        Parent = host, Name = "MusicPanel",
+        BackgroundColor3 = themeColor(Q, "MainBg"),
+        BackgroundTransparency = opts.Transparency or 0.10,
+        BorderSizePixel = 0,
+        Size = UDim2.new(0, W, 0, H),
+        Position = opts.Position or UDim2.new(0.5, -W / 2, 0.5, -H / 2),
+        Active = true, ZIndex = 40,
+    }, { Util.Create("UICorner", { CornerRadius = UDim.new(0, 12) }) })
+    Util.Create("UIStroke", {
+        Parent = panel, Color = accent, Thickness = 1,
+        Transparency = opts.StrokeTransparency or 0.55,
+    })
+
+    local self = { panel = panel, engine = nil, alive = true, items = {}, liked = {},
+                   volume = 0.6, current = nil, len = 0, playing = false, tab = "搜索" }
+
+    -- ── 头部：封面 + 歌名/歌手 + 最小化/关闭 ─────────────────────
+    local HEAD = 52
+    local cover = Util.Create("Frame", {
+        Parent = panel, BackgroundColor3 = themeColor(Q, "ControlAlt"),
+        BackgroundTransparency = 0.15, BorderSizePixel = 0,
+        Size = UDim2.new(0, 36, 0, 36), Position = UDim2.new(0, 12, 0, 8), ZIndex = 42,
+    }, { Util.Create("UICorner", { CornerRadius = UDim.new(0, 8) }) })
+    local coverImg = Util.Create("ImageLabel", {
+        Parent = cover, BackgroundTransparency = 1, BorderSizePixel = 0,
+        Size = UDim2.new(1, 0, 1, 0), Image = "", Visible = false,
+        ScaleType = Enum.ScaleType.Crop, ZIndex = 43,
+    }, { Util.Create("UICorner", { CornerRadius = UDim.new(0, 8) }) })
+    local coverIcon = makeIcon(cover, "Note", 18, accent, 44)
+
+    local title = Util.Create("TextLabel", {
+        Parent = panel, BackgroundTransparency = 1, BorderSizePixel = 0,
+        Size = UDim2.new(1, -116, 0, 16), Position = UDim2.new(0, 58, 0, 10),
+        Font = Enum.Font.GothamMedium, Text = opts.EmptyText or "未在播放",
+        TextColor3 = themeColor(Q, "TextBright"), TextSize = 13,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        TextTruncate = Enum.TextTruncate.AtEnd, ZIndex = 42,
+    })
+    local artist = Util.Create("TextLabel", {
+        Parent = panel, BackgroundTransparency = 1, BorderSizePixel = 0,
+        Size = UDim2.new(1, -116, 0, 14), Position = UDim2.new(0, 58, 0, 28),
+        Font = Enum.Font.Gotham, Text = "",
+        TextColor3 = themeColor(Q, "TextDim"), TextSize = 11,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        TextTruncate = Enum.TextTruncate.AtEnd, ZIndex = 42,
+    })
+    self.title, self.artist, self.coverImg, self.coverIcon = title, artist, coverImg, coverIcon
+
+    local btnClose = mkIconButton(panel, 22, -6, "Close", 12, true, 44)
+    local btnMin = mkIconButton(panel, 22, -32, "Down", 12, true, 44)
+    btnMin.Position = UDim2.new(1, -32, 0, 20)
+    btnMin.AnchorPoint = Vector2.new(1, 0.5)
+    btnClose.Position = UDim2.new(1, -6, 0, 20)
+
+    Util.Create("Frame", {
+        Parent = panel, BackgroundColor3 = Color3.fromRGB(255, 255, 255),
+        BackgroundTransparency = 0.9, BorderSizePixel = 0,
+        Size = UDim2.new(1, -20, 0, 1), Position = UDim2.new(0, 10, 0, HEAD), ZIndex = 42,
+    })
+
+    -- ── 传输区：上一首/播放/下一首 + 音量 ────────────────────────
+    local TRAN = HEAD + 8
+    local btnPrev = mkIconButton(panel, 26, 12, "Prev", 15, false, 44)
+    local btnPlay = mkIconButton(panel, 34, 44, "Play", 18, false, 44)
+    local btnNext = mkIconButton(panel, 26, 84, "Next", 15, false, 44)
+    for _, b in ipairs({ btnPrev, btnPlay, btnNext }) do
+        b.Position = UDim2.new(0, b.Position.X.Offset, 0, TRAN + 20)
+    end
+    local btnVolIcon = mkIconButton(panel, 22, -12, "Volume", 13, true, 44)
+    btnVolIcon.Position = UDim2.new(1, -12, 0, TRAN + 20)
+
+    local volSlider = mkSlider(panel, {
+        Size = UDim2.new(0, 76, 0, 3),
+        Position = UDim2.new(1, -112, 0, TRAN + 20),
+        Ratio = self.volume, ZIndex = 44,
+        OnChange = function(r)
+            self.volume = r
+            if self.engine then self.engine.SetVolume(r) end
+        end,
+    })
+    self.volSlider, self.btnVolIcon = volSlider, btnVolIcon
+
+    -- 进度条
+    local PROG = TRAN + 42
+    local prog = mkSlider(panel, {
+        Size = UDim2.new(1, -24, 0, 3),
+        Position = UDim2.new(0, 12, 0, PROG),
+        ZIndex = 44,
+        OnChange = function(r)
+            if self.engine and self.len > 0 then self.engine.Seek(r * self.len) end
+        end,
+    })
+    self.prog = prog
+    local timeCur = Util.Create("TextLabel", {
+        Parent = panel, BackgroundTransparency = 1, BorderSizePixel = 0,
+        Size = UDim2.new(0, 60, 0, 12), Position = UDim2.new(0, 12, 0, PROG + 6),
+        Font = Enum.Font.Gotham, Text = "0:00",
+        TextColor3 = themeColor(Q, "TextFaint"), TextSize = 10,
+        TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 44,
+    })
+    local timeTot = Util.Create("TextLabel", {
+        Parent = panel, BackgroundTransparency = 1, BorderSizePixel = 0,
+        Size = UDim2.new(0, 60, 0, 12), Position = UDim2.new(1, -72, 0, PROG + 6),
+        Font = Enum.Font.Gotham, Text = "0:00",
+        TextColor3 = themeColor(Q, "TextFaint"), TextSize = 10,
+        TextXAlignment = Enum.TextXAlignment.Right, ZIndex = 44,
+    })
+    self.timeCur, self.timeTot = timeCur, timeTot
+
+    -- ── 搜索框 ──────────────────────────────────────────────────
+    local SEARCH_Y = PROG + 24
+    local searchBox = Util.Create("Frame", {
+        Parent = panel, BackgroundColor3 = themeColor(Q, "Control"),
+        BackgroundTransparency = 0.25, BorderSizePixel = 0,
+        Size = UDim2.new(1, -24, 0, 30), Position = UDim2.new(0, 12, 0, SEARCH_Y), ZIndex = 42,
+    }, { Util.Create("UICorner", { CornerRadius = UDim.new(0, 8) }) })
+    makeIcon(searchBox, "Search", 13, themeColor(Q, "TextFaint"), 44)
+    local searchIcon = searchBox:GetChildren()[#searchBox:GetChildren()]
+    searchIcon.Position = UDim2.new(0, 16, 0.5, 0)
+    local tb = Util.Create("TextBox", {
+        Parent = searchBox, BackgroundTransparency = 1, BorderSizePixel = 0,
+        Size = UDim2.new(1, -46, 1, 0), Position = UDim2.new(0, 30, 0, 0),
+        Font = Enum.Font.Gotham, Text = "", PlaceholderText = opts.Placeholder or "搜索歌曲 / 歌手",
+        PlaceholderColor3 = themeColor(Q, "TextFaint"),
+        TextColor3 = themeColor(Q, "TextBright"), TextSize = 12,
+        TextXAlignment = Enum.TextXAlignment.Left, ClearTextOnFocus = false, ZIndex = 44,
+    })
+    self.searchBox = tb
+    local debounce = nil
+    tb:GetPropertyChangedSignal("Text"):Connect(function()
+        if debounce then task.cancel(debounce) end
+        local txt = tb.Text
+        debounce = task.delay(0.5, function()
+            if txt ~= "" then self:Search(txt) end
+        end)
+    end)
+    tb.FocusLost:Connect(function() if tb.Text ~= "" then self:Search(tb.Text) end end)
+
+    -- ── 分类条 ──────────────────────────────────────────────────
+    local TABS_Y = SEARCH_Y + 38
+    local TABS = { "搜索", "我喜欢的", "播放列表", "歌词" }
+    local tabButtons = {}
+    local tabUnderline = Util.Create("Frame", {
+        Parent = panel, BackgroundColor3 = accent, BorderSizePixel = 0,
+        Size = UDim2.new(0, 40, 0, 2), Position = UDim2.new(0, 12, 0, TABS_Y + 24),
+        ZIndex = 44,
+    }, { Util.Create("UICorner", { CornerRadius = UDim.new(1, 0) }) })
+    local function selectTab(name)
+        self.tab = name
+        for i, n in ipairs(TABS) do
+            local b = tabButtons[i]
+            if b then
+                b.TextColor3 = (n == name) and themeColor(Q, "TextBright") or themeColor(Q, "TextFaint")
+            end
+        end
+        self:Refresh()
+        local idx = 1
+        for i, n in ipairs(TABS) do if n == name then idx = i end end
+        Util.Tween(tabUnderline, {
+            Position = UDim2.new(0, 12 + (idx - 1) * 62, 0, TABS_Y + 24),
+            Size = UDim2.new(0, 44, 0, 2),
+        }, 0.15)
+    end
+    for i, name in ipairs(TABS) do
+        local b = Util.Create("TextButton", {
+            Parent = panel, BackgroundTransparency = 1, BorderSizePixel = 0, Text = name,
+            Size = UDim2.new(0, 56, 0, 24), Position = UDim2.new(0, 10 + (i - 1) * 62, 0, TABS_Y),
+            Font = Enum.Font.GothamMedium, TextSize = 12,
+            TextColor3 = themeColor(Q, "TextFaint"), ZIndex = 44, AutoButtonColor = false,
+        })
+        b.MouseButton1Click:Connect(function() snd("Click", 0.1) selectTab(name) end)
+        tabButtons[i] = b
+    end
+    self.tabButtons, self.selectTab = tabButtons, selectTab
+
+    -- ── 内容区 ──────────────────────────────────────────────────
+    local BODY_Y = TABS_Y + 30
+    local scroll = Util.Create("ScrollingFrame", {
+        Parent = panel, BackgroundTransparency = 1, BorderSizePixel = 0,
+        Size = UDim2.new(1, -20, 1, -(BODY_Y + 10)), Position = UDim2.new(0, 10, 0, BODY_Y),
+        CanvasSize = UDim2.new(0, 0, 0, 0), ScrollBarThickness = 3,
+        ScrollBarImageColor3 = accent, ScrollBarImageTransparency = 0.4,
+        ZIndex = 42,
+    }, {
+        Util.Create("UIListLayout", {
+            SortOrder = Enum.SortOrder.LayoutOrder, Padding = UDim.new(0, 2),
+        }),
+        Util.Create("UIPadding", { PaddingTop = UDim.new(0, 2), PaddingBottom = UDim.new(0, 6) }),
+    })
+    self.scroll = scroll
+    scroll:GetPropertyChangedSignal("AbsoluteCanvasSize"):Connect(function()
+        scroll.CanvasSize = UDim2.new(0, 0, 0, scroll.AbsoluteCanvasSize.Y)
+    end)
+    local layout = scroll:FindFirstChildOfClass("UIListLayout")
+    if layout then
+        layout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+            scroll.CanvasSize = UDim2.new(0, 0, 0, layout.AbsoluteContentSize.Y)
+        end)
+    end
+
+    local emptyLabel = Util.Create("TextLabel", {
+        Parent = scroll, BackgroundTransparency = 1, BorderSizePixel = 0,
+        Size = UDim2.new(1, 0, 0, 60), LayoutOrder = 1,
+        Font = Enum.Font.Gotham, Text = "输入关键词搜索，或打开「我喜欢的」",
+        TextColor3 = themeColor(Q, "TextFaint"), TextSize = 12, ZIndex = 43,
+    })
+    self.emptyLabel = emptyLabel
+
+    -- ── 行 / 歌词的构建与刷新 ───────────────────────────────────
+    self.rowHeight = opts.RowHeight or 44
+    self.rows = {}
+    self.lyricLines = {}
+
+    -- ── 对外方法（Refresh 在下面装配） ──────────────────────────
+    function self:SetSong(song)
+        song = song or {}
+        title.Text = song.Title or opts.EmptyText or "未在播放"
+        artist.Text = song.Artist or ""
+        if type(song.Cover) == "string" and song.Cover ~= "" then
+            coverImg.Image = song.Cover coverImg.Visible = true coverIcon.Visible = false
+        else
+            coverImg.Visible = false coverIcon.Visible = true
+        end
+    end
+    function self:SetPlaying(on)
+        self.playing = on and true or false
+        btnPlay:ClearAllChildren()
+        Util.Create("UICorner", { Parent = btnPlay, CornerRadius = UDim.new(0, 6) })
+        makeIcon(btnPlay, self.playing and "Pause" or "Play", 18, themeColor(Q, "TextBright"), 45)
+    end
+    function self:SetProgress(pos, len)
+        self.pos, self.len = pos or 0, len or 0
+        local r = (self.len > 0) and math.clamp(self.pos / self.len, 0, 1) or 0
+        prog:SetRatio(r)
+        timeCur.Text = fmtTime(self.pos)
+        timeTot.Text = fmtTime(self.len)
+    end
+    function self:SetVolume(v)
+        self.volume = math.clamp(v or 0, 0, 1)
+        volSlider:SetRatio(self.volume)
+    end
+    function self:Show() panel.Visible = true end
+    function self:Hide() panel.Visible = false end
+    function self:Toggle() panel.Visible = not panel.Visible end
+    function self:IsVisible() return panel.Visible end
+    function self:GetFrame() return panel end
+    function self:Destroy() self.alive = false pcall(function() panel:Destroy() end) end
+    function self:SetMiniBar(bar) self.miniBar = bar end
+
+    btnPlay.MouseButton1Click:Connect(function()
+        snd("Click", 0.12)
+        if self.engine then self.engine.Toggle() end
+    end)
+    btnPrev.MouseButton1Click:Connect(function() snd("Click", 0.12) if self.engine then self.engine.Prev() end end)
+    btnNext.MouseButton1Click:Connect(function() snd("Click", 0.12) if self.engine then self.engine.Next() end end)
+    btnVolIcon.MouseButton1Click:Connect(function()
+        snd("Click", 0.1)
+        local v = (self.volume > 0.01) and 0 or 0.6
+        self:SetVolume(v)
+        if self.engine then self.engine.SetVolume(v) end
+    end)
+    btnMin.MouseButton1Click:Connect(function()
+        snd("Click", 0.1)
+        self:Hide()
+        if self.miniBar then self.miniBar:Show() self.miniBar:Wake(8) end
+        if opts.OnMinimize then opts.OnMinimize(self) end
+    end)
+    btnClose.MouseButton1Click:Connect(function()
+        snd("Click", 0.1)
+        self:Hide()
+        if opts.OnClose then opts.OnClose(self) end
+    end)
+
+    -- 拖拽移动
+    local dragStart, startPos = nil, nil
+    panel.InputBegan:Connect(function(i)
+        if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
+            dragStart = i.Position
+            startPos = Vector2.new(panel.AbsolutePosition.X, panel.AbsolutePosition.Y)
+        end
+    end)
+    UserInputService.InputChanged:Connect(function(i)
+        if not dragStart then return end
+        if i.UserInputType ~= Enum.UserInputType.MouseMovement and i.UserInputType ~= Enum.UserInputType.Touch then return end
+        local d = i.Position - dragStart
+        if math.abs(d.X) + math.abs(d.Y) < 5 then return end
+        panel.AnchorPoint = Vector2.new(0, 0)
+        panel.Position = UDim2.new(0, startPos.X + d.X, 0, startPos.Y + d.Y)
+    end)
+    UserInputService.InputEnded:Connect(function(i)
+        if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
+            dragStart = nil
+        end
+    end)
+
+    -- ── 内容渲染：歌曲行 ────────────────────────────────────────
+    local function clearRows()
+        for _, r in ipairs(self.rows) do pcall(function() r:Destroy() end) end
+        self.rows = {}
+    end
+
+    local function makeRow(item, order)
+        local RH = self.rowHeight
+        local row = Util.Create("TextButton", {
+            Parent = scroll, BackgroundColor3 = themeColor(Q, "Control"),
+            BackgroundTransparency = 1, BorderSizePixel = 0, Text = "",
+            Size = UDim2.new(1, 0, 0, RH), LayoutOrder = order,
+            ZIndex = 43, AutoButtonColor = false,
+        }, { Util.Create("UICorner", { CornerRadius = UDim.new(0, 8) }) })
+
+        local cov = Util.Create("Frame", {
+            Parent = row, BackgroundColor3 = themeColor(Q, "ControlAlt"),
+            BackgroundTransparency = 0.2, BorderSizePixel = 0,
+            Size = UDim2.new(0, RH - 16, 0, RH - 16),
+            Position = UDim2.new(0, 8, 0.5, 0), AnchorPoint = Vector2.new(0, 0.5), ZIndex = 44,
+        }, { Util.Create("UICorner", { CornerRadius = UDim.new(0, 6) }) })
+        local cImg = Util.Create("ImageLabel", {
+            Parent = cov, BackgroundTransparency = 1, BorderSizePixel = 0,
+            Size = UDim2.new(1, 0, 1, 0), Image = "", Visible = false,
+            ScaleType = Enum.ScaleType.Crop, ZIndex = 45,
+        }, { Util.Create("UICorner", { CornerRadius = UDim.new(0, 6) }) })
+        local cIcon = makeIcon(cov, "Note", 13, accent, 45)
+        if type(item.Cover) == "string" and item.Cover ~= "" then
+            cImg.Image = item.Cover cImg.Visible = true cIcon.Visible = false
+        end
+
+        local t = Util.Create("TextLabel", {
+            Parent = row, BackgroundTransparency = 1, BorderSizePixel = 0,
+            Size = UDim2.new(1, -130, 0, 14), Position = UDim2.new(0, RH - 6, 0, RH / 2 - 15),
+            Font = Enum.Font.GothamMedium, Text = item.Title or "未知",
+            TextColor3 = themeColor(Q, "TextBright"), TextSize = 12,
+            TextXAlignment = Enum.TextXAlignment.Left,
+            TextTruncate = Enum.TextTruncate.AtEnd, ZIndex = 44,
+        })
+        local s = Util.Create("TextLabel", {
+            Parent = row, BackgroundTransparency = 1, BorderSizePixel = 0,
+            Size = UDim2.new(1, -130, 0, 12), Position = UDim2.new(0, RH - 6, 0, RH / 2 + 1),
+            Font = Enum.Font.Gotham, Text = item.Sub or "",
+            TextColor3 = themeColor(Q, "TextDim"), TextSize = 10,
+            TextXAlignment = Enum.TextXAlignment.Left,
+            TextTruncate = Enum.TextTruncate.AtEnd, ZIndex = 44,
+        })
+        local dur = Util.Create("TextLabel", {
+            Parent = row, BackgroundTransparency = 1, BorderSizePixel = 0,
+            Size = UDim2.new(0, 42, 0, 12), Position = UDim2.new(1, -76, 0.5, 0),
+            AnchorPoint = Vector2.new(0, 0.5),
+            Font = Enum.Font.Gotham, Text = fmtTime(item.Duration or 0),
+            TextColor3 = themeColor(Q, "TextFaint"), TextSize = 10,
+            TextXAlignment = Enum.TextXAlignment.Right, ZIndex = 44,
+        })
+        local fav = mkIconButton(row, 24, -6, item.Fav and "HeartOn" or "Heart", 13, true, 44)
+        local activeMark = Util.Create("Frame", {
+            Parent = row, BackgroundColor3 = accent, BorderSizePixel = 0,
+            Size = UDim2.new(0, 2, 0, RH - 16), Position = UDim2.new(0, 2, 0.5, 0),
+            AnchorPoint = Vector2.new(0, 0.5), Visible = false, ZIndex = 45,
+        }, { Util.Create("UICorner", { CornerRadius = UDim.new(1, 0) }) })
+
+        local api = { frame = row, item = item }
+        function api:SetActive(on)
+            activeMark.Visible = on and true or false
+            row.BackgroundTransparency = on and 0.72 or 1
+        end
+        function api:SetFav(on)
+            fav:ClearAllChildren()
+            Util.Create("UICorner", { Parent = fav, CornerRadius = UDim.new(0, 6) })
+            makeIcon(fav, on and "HeartOn" or "Heart", 13,
+                on and C(255, 80, 110) or themeColor(Q, "TextDim"), 45)
+        end
+
+        row.MouseEnter:Connect(function() Util.Tween(row, { BackgroundTransparency = 0.86 }, 0.12) end)
+        row.MouseLeave:Connect(function()
+            Util.Tween(row, { BackgroundTransparency = activeMark.Visible and 0.72 or 1 }, 0.12)
+        end)
+        row.MouseButton1Click:Connect(function()
+            snd("Click", 0.12)
+            if self.onSelect then self.onSelect(item) end
+        end)
+        fav.MouseButton1Click:Connect(function()
+            snd("Click", 0.12)
+            if self.engine and self.engine.ToggleFav then
+                local now = self.engine.ToggleFav(item)
+                api:SetFav(now == true)
+                item.Fav = now == true
+            end
+        end)
+        return api
+    end
+
+    local function renderRows(list, emptyText)
+        clearRows()
+        if #list == 0 then
+            emptyLabel.Text = emptyText or "暂无歌曲"
+            emptyLabel.Visible = true
+            emptyLabel.LayoutOrder = 1
+            return
+        end
+        emptyLabel.Visible = false
+        for i, item in ipairs(list) do
+            local r = makeRow(item, i)
+            if self.current and item.Id == self.current.Id then r:SetActive(true) end
+            self.rows[#self.rows + 1] = r.frame
+            self.rowApis = self.rowApis or {}
+            self.rowApis[#self.rowApis + 1] = r
+        end
+    end
+
+    local function renderLyrics()
+        clearRows()
+        self.rowApis = {}
+        local lines = self.lyricLines
+        if not lines or #lines == 0 then
+            emptyLabel.Text = "暂无歌词"
+            emptyLabel.Visible = true
+            emptyLabel.LayoutOrder = 1
+            return
+        end
+        emptyLabel.Visible = false
+        self.lyricLabels = {}
+        for i, l in ipairs(lines) do
+            local lab = Util.Create("TextLabel", {
+                Parent = scroll, BackgroundTransparency = 1, BorderSizePixel = 0,
+                Size = UDim2.new(1, -16, 0, 26), LayoutOrder = i,
+                Font = Enum.Font.GothamMedium, Text = l.text or "",
+                TextColor3 = themeColor(Q, "TextFaint"), TextSize = 12,
+                TextWrapped = true, ZIndex = 43,
+            })
+            lab.MouseButton1Click:Connect(function()
+                if self.engine then self.engine.Seek(l.t or 0) end
+            end)
+            self.lyricLabels[i] = lab
+            self.rows[#self.rows + 1] = lab
+        end
+    end
+
+    function self:Refresh()
+        self.rowApis = {}
+        local t = self.tab
+        if t == "搜索" then
+            renderRows(self.items, "输入关键词搜索")
+        elseif t == "我喜欢的" then
+            renderRows(self.liked, "还没有红心歌曲")
+        elseif t == "播放列表" then
+            local q = {}
+            local ok, st = pcall(function() return self.engine and self.engine.GetState() end)
+            if ok and st and st.queue then q = st.queue end
+            renderRows(q, "播放队列是空的")
+        else
+            renderLyrics()
+        end
+    end
+
+    function self:Search(kw)
+        if not self.engine then return end
+        local ok, list = pcall(function() return self.engine.Search(kw, opts.SearchLimit or 30) end)
+        self.items = (ok and type(list) == "table") and list or {}
+        if self.tab ~= "搜索" then selectTab("搜索") else self:Refresh() end
+    end
+
+    function self:LoadLiked()
+        if not self.engine then return end
+        task.spawn(function()
+            local list = self.engine.Liked(false)
+            self.liked = type(list) == "table" and list or {}
+            if self.tab == "我喜欢的" then self:Refresh() end
+        end)
+    end
+
+    -- ── 接标准后端 ──────────────────────────────────────────────
+    function self:Bind(engine, bopts)
+        self.engine = engine
+        bopts = bopts or {}
+        self.onSelect = function(item)
+            self.current = item
+            local list = (self.tab == "我喜欢的") and self.liked or self.items
+            engine.SetQueue(list, 1)
+            engine.Play(item)
+            self:SetSong({ Title = item.Title, Artist = item.Sub, Cover = item.Cover })
+            for _, r in ipairs(self.rowApis or {}) do
+                if r.item and r.item.Id == item.Id then r:SetActive(true) end
+            end
+        end
+        if bopts.Volume then self:SetVolume(bopts.Volume) engine.SetVolume(self.volume) end
+        task.spawn(function()
+            local lastId, lastTab = nil, nil
+            while self.alive do
+                task.wait(bopts.PollInterval or 0.25)
+                local ok, st = pcall(function() return engine.GetState() end)
+                if ok and st then
+                    self:SetPlaying(st.playing)
+                    self:SetProgress(st.pos, st.len)
+                    local song = st.song
+                    if song and song.id ~= lastId then
+                        lastId = song.id
+                        self.current = { Id = song.id, Title = song.name, Sub = song.artist }
+                        self:SetSong({ Title = song.name, Artist = song.artist, Cover = song.cover })
+                        self.lyricLines = engine.Lyric and engine.Lyric() or nil
+                        if self.tab == "歌词" then self:Refresh() end
+                        if self.miniBar then self.miniBar:Wake() end
+                    end
+                    -- 歌词高亮
+                    if self.tab == "歌词" and self.lyricLabels and engine.LyricAt then
+                        local _, idx = engine.LyricAt(st.pos or 0)
+                        if idx and idx ~= lastTab then
+                            lastTab = idx
+                            for i, lab in ipairs(self.lyricLabels) do
+                                lab.TextColor3 = (i == idx) and accent or themeColor(Q, "TextFaint")
+                            end
+                        end
+                    end
+                end
+            end
+        end)
+        return self
+    end
+
+    function self:BindNetease(bopts)
+        local g = (getgenv and getgenv()) or _G
+        local ncm = g and g.NCM
+        if not ncm then return nil, "getgenv().NCM 不存在：先加载 netease-engine.lua" end
+        local eng, err = MusicUI.neteaseEngine(ncm)
+        if not eng then return nil, err end
+        return self:Bind(eng, bopts)
+    end
+
+    self:SetPlaying(false)
+    self:SetVolume(self.volume)
+    self.rowApis = {}
+    selectTab("搜索")
+    return self
+end
+
+-- 用法：MusicUI.CreateWindow(QuantumUI, { Size = UDim2.new(0, 380, 0, 520) })
+function MusicUI.CreateWindow(a, b)
+    local cls, opts
+    if type(a) == "table" and (a.ScreenGui or a.MainFrame) then cls, opts = a, (b or {})
+    else cls, opts = Q, (a or {}) end
+    local host = opts.Parent or (cls and cls.ScreenGui)
+    if not host then return nil, "找不到宿主 ScreenGui：先创建 QuantumUI 窗口，或用 opts.Parent 指定" end
+    if cls and cls ~= Q then bindInternals(cls) end
+    return buildMusicPanel(host, opts)
+end
+
+-- ── 装到类表上 ──────────────────────────────────────────────────
+-- v1.3 起 CreateMusicWindow 返回悬浮式面板；旧实现保留为 Legacy 不再使用
 local function installCreateMusicWindow(cls)
+    function cls:CreateMusicPanel(options)
+        options = options or {}
+        local host = self.ScreenGui
+        if not host then return nil end
+        local panel = buildMusicPanel(host, options)
+        if options.MiniBar then panel:SetMiniBar(options.MiniBar) end
+        return panel
+    end
+
+    function cls:CreateMusicWindow(options)
+        return self:CreateMusicPanel(options)
+    end
+end
+
+-- ═══════════════════════════════════════════════════════════════════
+local function installCreateMusicWindowLegacy(cls)   -- v1.2 及以前的旧窗口，保留但不再使用
     function cls:CreateMusicWindow(options)
         options = options or {}
         local host = self.ScreenGui
