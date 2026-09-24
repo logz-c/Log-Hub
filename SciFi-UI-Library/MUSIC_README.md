@@ -16,8 +16,10 @@ local MusicUI   = loadstring(game:HttpGet(MUS))()(QuantumUI)   -- 挂载到类�
 local Win = QuantumUI.new({Title = "My Hub"})
 ```
 
-> `MusicUI` 也可以事后挂：`MusicUI.Attach(QuantumUI)`。
-> `source.lua` 里新增了 `QuantumUI.Internals`（Utility / Sounds / CustomAssets / Themes / Mouse），
+
+
+> `MusicUI` 也可以事后挂：`MusicUI.Attach(QuantumUI)`。  
+> `source.lua` 里新增了 `QuantumUI.Internals`（Utility / Sounds / CustomAssets / Themes / Mouse），  
 > 分支模块直接复用，不用重复实现。
 
 ---
@@ -37,13 +39,13 @@ local Tab = Win:AddMusicTab({
 
 ### 弹出模式（`Popup = true`，默认）
 
-| 操作 | 结果 |
-|---|---|
-| 点击 MUSIC 页签 | 主窗口隐藏 + 音乐窗口出现（**二者不并存**） |
-| 点音乐窗口的 ✕ | 音乐窗口关闭 + 主窗口恢复 + 回到上一个普通页签 |
-| 切到其它页签 | 音乐窗口隐藏 + 主窗口恢复 |
-| `Tab:OpenMusic()` | 手动打开 |
-| `Tab:CloseMusic()` | 手动关闭并恢复主窗口 |
+| 操作                     | 结果                                                  |
+| ---------------------- | --------------------------------------------------- |
+| 点击 MUSIC 页签            | 主窗口隐藏 + 音乐窗口出现（**二者不并存**）                           |
+| 点音乐窗口的 ✕               | 音乐窗口关闭 + 主窗口恢复 + 回到上一个普通页签                          |
+| 切到其它页签                 | 音乐窗口隐藏 + 主窗口恢复                                      |
+| `Tab:OpenMusic()`      | 手动打开                                                |
+| `Tab:CloseMusic()`     | 手动关闭并恢复主窗口                                          |
 | `Tab:GetMusicWindow()` | 拿到窗口对象（`Show/Hide/Toggle/SetTitle/SetSize/Destroy`） |
 
 ### 内联模式（`Popup = false`）
@@ -182,7 +184,7 @@ Chip:Set({"华语","英语"})  Chip:GetActive()  Chip:Clear()
 ### 标准控件直通
 
 `Tab:AddSection / AddButton / AddToggle / AddDangerToggle / AddSlider / AddDropdown /
-AddTextbox / AddColorPicker / AddKeybind / AddLabel / AddParagraph`
+AddTextbox / AddColorPicker / AddKeybind / AddLabel / AddParagraph`  
 全部可用，第二个参数里传 `Panel = "面板名"` 决定塞到哪个面板。
 
 ```lua
@@ -213,28 +215,28 @@ MW:SetTitle("…")  MW:SetSize(…)  MW:SetPosition(…)  MW:Destroy()
 
 **双轨：已上传贴图（默认）+ 代码绘制（兜底）**
 
-20 张图标已上传到 Roblox（白色图形 + 透明底，可被 `ImageColor3` 染色跟随主题），
+20 张图标已上传到 Roblox（白色图形 + 透明底，可被 `ImageColor3` 染色跟随主题），  
 ID 写在 `music.lua` 顶部的 `UPLOADED` 表里，**默认就生效**，不需要任何配置：
 
 ```lua
 local MusicUI = loadstring(game:HttpGet(MUSIC_URL))()(QuantumUI)  -- 直接是贴图版
 ```
 
-| 开关 | 作用 |
-|---|---|
-| `MusicUI.UseDrawnIcons()` | 切回**代码绘制**图标（零资源、离线可用、不怕资产被删） |
-| `MusicUI.UseUploadedIcons()` | 切回上传贴图 |
-| `MusicUI.Assets.Play = "rbxassetid://…"` | 单独换某一张 |
+| 开关                                       | 作用                            |
+| ---------------------------------------- | ----------------------------- |
+| `MusicUI.UseDrawnIcons()`                | 切回**代码绘制**图标（零资源、离线可用、不怕资产被删） |
+| `MusicUI.UseUploadedIcons()`             | 切回上传贴图                        |
+| `MusicUI.Assets.Play = "rbxassetid://…"` | 单独换某一张                        |
 
-槽位一旦是 `rbxassetid://…`，`makeIcon` 就用 `ImageLabel`；留空则回退到绘制图标。
+槽位一旦是 `rbxassetid://…`，`makeIcon` 就用 `ImageLabel`；留空则回退到绘制图标。  
 `Cover` 是彩色图（深紫渐变 + 音符），由 `makeCover` 处理，**不会被 `ImageColor3` 染色**。
 
-代码绘制版的原理：矩形 + 45° 旋转矩形被 `ClipsDescendants` 容器裁成三角，
-方角风格下同样好看，`paintIcon` 递归改子 Frame 的 `BackgroundColor3` 实现换色。
+代码绘制版的原理：矩形 + 45° 旋转矩形被 `ClipsDescendants` 容器裁成三角，  
+方角风格下同样好看，`paintIcon` 递归改子 Frame 的 `BackgroundColor3` 实现换色。  
 内置：`Play Pause Prev Next Shuffle Repeat RepeatOne Heart HeartOn Search Clear Volume Mute
 Queue Note Close Plus Trash Up Down`。
 
 `MusicUI.Draw.Tri(parent, w, h, color, z, rot, cx, cy)` 也可单独调用来自绘三角。
 
-完整 Asset ID 清单与「改形状 → 重新上传」的流程见
+完整 Asset ID 清单与「改形状 → 重新上传」的流程见  
 [`../ui_assets/icons/README.md`](../ui_assets/icons/README.md)。

@@ -46,7 +46,7 @@ local SoundService      = game:GetService("SoundService")
 local LocalPlayer = Players.LocalPlayer
 
 local MusicUI = {}
-MusicUI.Version = "1.0.0"
+MusicUI.Version = "1.1.0"
 
 -- ═══════════════════════════════════════════════════════════════════
 --  美术资源槽位
@@ -2163,6 +2163,264 @@ end
 -- ═══════════════════════════════════════════════════════════════════
 --  挂载
 -- ═══════════════════════════════════════════════════════════════════
+-- ══════════════════════════════════════════════════════════════════
+--  引擎绑定层（v1.1）
+--    music.lua 对音频后端零依赖，只认下面这组「标准后端接口」：
+--      Search(kw, limit) -> items[]     items: {Id,Title,Sub,Duration,Cover,Fav}
+--      Play(item)  Toggle()  Next()  Prev()
+--      Seek(sec)  SetVolume(v)  SetQueue(items, index)
+--      GetState() -> {playing,pos,len,volume,index,count,status,song}
+--      Lyric() -> {{t=秒,text=…}} | nil      Login() -> ok, account
+--    任何实现这组接口的对象都能接进来；BindNetease() 是内置的网易云适配器
+--    （配合同目录的 netease-engine.lua 使用）。
+-- ══════════════════════════════════════════════════════════════════
+
+local RunService = game:GetService("RunService")
+
+-- 把网易云引擎（getgenv().NCM）适配成标准后端
+local function neteaseEngine(ncm)
+    if type(ncm) ~= "table" then return nil, "getgenv().NCM 不存在，netease-engine.lua 没加载？" end
+    local E = { raw = ncm, name = "netease" }
+
+    local function toItem(s)
+        if not s then return nil end
+        return {
+            Id = s.id, Title = s.name or "未知", Sub = s.artist or "",
+            Duration = s.dur or 0, Cover = s.cover or "",
+            Fav = (ncm.FavHas and ncm.FavHas(s.id)) or false,
+            _raw = s,
+        }
+    end
+    local function toRaw(item)
+        if not item then return nil end
+        return item._raw or { id = item.Id, name = item.Title, artist = item.Sub, dur = item.Duration }
+    end
+
+    function E.Search(kw, limit)
+        local list = ncm.Search(kw, limit or 30) or {}
+        local out = {}
+        for i, s in ipairs(list) do out[i] = toItem(s) end
+        return out
+    end
+
+    function E.Liked(force)
+        local list, err = ncm.SearchLiked(force)
+        if type(list) ~= "table" then return {}, err or "取红心失败" end
+        local out = {}
+        for i, s in ipairs(list) do out[i] = toItem(s) end
+        return out, err
+    end
+
+    function E.Play(item) local r = toRaw(item) if not r then return false, "无歌曲" end return ncm.Play(r) end
+    function E.Toggle() ncm.Toggle() end
+    function E.Next() ncm.Next() end
+    function E.Prev() ncm.Prev() end
+    function E.Seek(sec) ncm.Seek(sec) end
+    function E.SetVolume(v) ncm.SetVolume(v) end
+    function E.GetState() return ncm.GetState() end
+    function E.Lyric() return ncm.LyricLines() end
+    function E.LyricAt(pos) return ncm.LyricAt(pos) end
+    function E.Login() return ncm.IsLoggedIn() end
+    function E.SetQueue(items, index)
+        local raw = {}
+        for i, it in ipairs(items or {}) do raw[i] = toRaw(it) end
+        return ncm.SetQueue(raw, index)
+    end
+    function E.ToggleFav(item)
+        local r = toRaw(item)
+        if not r then return false end
+        return ncm.FavToggle(r)
+    end
+    return E
+end
+MusicUI.neteaseEngine = neteaseEngine
+
+-- ── 一键绑定：自动建好播放卡片 / 搜索框 / 分类条 / 列表 / 队列 / 歌词 ──
+-- target 可以是 Tab（AddMusicTab 的返回值）或 MusicWindow
+-- opts = {Panels={Songs,Likes,Queue,Lyrics}, SearchLimit, PollInterval,
+--         PlayerHeight, SearchPlaceholder, OnLog, AutoLiked}
+function MusicUI.BindEngine(target, engine, opts)
+    if type(target) ~= "table" then return nil, "BindEngine(target, engine): target 必填" end
+    if type(engine) ~= "table" or type(engine.GetState) ~= "function" then
+        return nil, "engine 必须实现标准后端接口（至少 GetState）"
+    end
+    opts = opts or {}
+    local PN = opts.Panels or {}
+    local P_SONG, P_LIKE = PN.Songs or "Songs", PN.Likes or "Likes"
+    local P_QUEUE, P_LYRIC = PN.Queue or "Queue", PN.Lyrics or "Lyrics"
+    local LIMIT  = opts.SearchLimit or 30
+    local POLL   = opts.PollInterval or 0.25
+    local log    = opts.OnLog or function() end
+
+    for _, name in ipairs({ P_SONG, P_LIKE, P_QUEUE, P_LYRIC }) do target:AddPanel(name) end
+
+    local Ctl = { engine = engine, target = target, volume = 0.6, playing = false }
+    Ctl.current, Ctl.items, Ctl.liked = nil, {}, {}
+
+    -- ── 播放卡片 ──────────────────────────────────────────────
+    local P = target:AddMusicPlayer({
+        Height = opts.PlayerHeight or 132,
+        OnPlayPause = function() engine.Toggle() end,
+        OnPrev      = function() engine.Prev() end,
+        OnNext      = function() engine.Next() end,
+        OnSeek      = function(sec) engine.Seek(sec) end,
+        OnVolume    = function(v) Ctl.volume = v engine.SetVolume(v) end,
+        OnLike      = function(on)
+            if not Ctl.current then return end
+            local now = engine.ToggleFav and engine.ToggleFav(Ctl.current)
+            if on ~= nil then P:SetLiked(now == true) end
+            if Ctl.songList then Ctl.songList:SetFav(Ctl.current.Id, now == true) end
+        end,
+    })
+    P:SetVolume(Ctl.volume)
+    Ctl.player = P
+
+    -- ── 搜索框 ────────────────────────────────────────────────
+    local S = target:AddSearchBox({
+        Placeholder = opts.SearchPlaceholder or "搜索歌曲 / 歌手",
+        Debounce = 0.45,
+        OnSearch = function(text)
+            if text == "" then return end
+            Ctl.search(text)
+        end,
+    })
+    Ctl.searchBox = S
+
+    -- ── 分类条 ────────────────────────────────────────────────
+    local Tabs = target:AddSubTabs({ "搜索", "我喜欢的", "播放列表", "歌词" }, function(name)
+        if name == "播放列表" then target:ShowPanel(P_QUEUE)
+        elseif name == "我喜欢的" then target:ShowPanel(P_LIKE) Ctl.loadLiked()
+        elseif name == "歌词" then target:ShowPanel(P_LYRIC)
+        else target:ShowPanel(P_SONG) end
+    end)
+    Ctl.subTabs = Tabs
+
+    -- ── 列表 / 队列 / 歌词 ────────────────────────────────────
+    Ctl.songList = target:AddSongList({
+        Panel = P_SONG, RowHeight = 58, ShowFav = true, ShowDuration = true,
+        EmptyText = "输入关键词搜索，或打开「我喜欢的」",
+        OnSelect = function(item) Ctl.playItem(item, Ctl.items) end,
+    })
+    Ctl.likeList = target:AddSongList({
+        Panel = P_LIKE, RowHeight = 58, ShowFav = true, ShowDuration = true,
+        EmptyText = "还没有红心歌曲",
+        OnSelect = function(item) Ctl.playItem(item, Ctl.liked) end,
+    })
+    Ctl.queue = target:AddQueue({
+        Panel = P_QUEUE,
+        OnSelect = function(item, i)
+            if engine.PlayAt then engine.PlayAt(i) else engine.Play(item) end
+        end,
+        OnRemove = function(item, i)
+            table.remove(Ctl.items, i)
+            engine.SetQueue(Ctl.items)
+            Ctl.queue:Set(Ctl.items)
+        end,
+    })
+    Ctl.lyric = target:AddLyricPanel({
+        Panel = P_LYRIC, TextSize = 14, AutoScroll = true,
+        OnLineClick = function(t) engine.Seek(t) end,
+    })
+
+    -- ── 行为 ──────────────────────────────────────────────────
+    function Ctl.playItem(item, list)
+        if not item then return end
+        Ctl.current = item
+        engine.SetQueue(list or { item }, 1)
+        local ok, err = engine.Play(item)
+        if not ok then P:SetStatus(tostring(err or "播放失败")) end
+        P:SetSong({ Id = item.Id, Title = item.Title, Artist = item.Sub,
+                    Duration = item.Duration, Cover = item.Cover })
+        if Ctl.songList then Ctl.songList:SetActive(item.Id) end
+        if Ctl.likeList then Ctl.likeList:SetActive(item.Id) end
+        Ctl.lyric:Clear()
+        log("play: " .. tostring(item.Title))
+    end
+
+    function Ctl.search(kw)
+        local ok, list = pcall(function() return engine.Search(kw, LIMIT) end)
+        if not ok or type(list) ~= "table" then
+            Ctl.songList:SetEmptyText("搜索失败")
+            return
+        end
+        Ctl.items = list
+        Ctl.songList:Set(list)
+        target:ShowPanel(P_SONG)
+        log("search: " .. kw .. " -> " .. #list)
+    end
+
+    function Ctl.loadLiked()
+        Ctl.likeList:SetLoading(true)
+        task.spawn(function()
+            local list, err = engine.Liked(false)
+            Ctl.liked = list or {}
+            Ctl.likeList:Set(Ctl.liked)
+            if err then Ctl.likeList:SetEmptyText(tostring(err)) end
+            log("liked: " .. #Ctl.liked .. " " .. tostring(err or ""))
+        end)
+    end
+
+    -- ── 轮询同步 ──────────────────────────────────────────────
+    Ctl.alive = true
+    task.spawn(function()
+        local lastStatus, lastSongId, lastLyricIdx = nil, nil, nil
+        while Ctl.alive do
+            task.wait(POLL)
+            local ok, st = pcall(function() return engine.GetState() end)
+            if ok and st then
+                Ctl.playing = st.playing and true or false
+                P:SetPlaying(Ctl.playing)
+                P:SetProgress(st.pos or 0, st.len or 0)
+                if st.status ~= lastStatus then
+                    lastStatus = st.status
+                    P:SetStatus(st.status or "")
+                end
+                local song = st.song
+                local sid = song and song.id
+                if sid and sid ~= lastSongId then
+                    lastSongId = sid
+                    Ctl.current = { Id = sid, Title = song.name or "未知", Sub = song.artist or "",
+                                    Duration = song.dur or 0 }
+                    P:SetSong(Ctl.current)
+                    P:SetLiked(engine.raw and engine.raw.FavHas and engine.raw.FavHas(sid) or false)
+                    if Ctl.songList then Ctl.songList:SetActive(sid) end
+                    if Ctl.likeList then Ctl.likeList:SetActive(sid) end
+                    local lines = engine.Lyric()
+                    Ctl.lyric:Set(lines or {})
+                    lastLyricIdx = nil
+                end
+                local _, idx = engine.LyricAt and engine.LyricAt(st.pos or 0)
+                if idx and idx ~= lastLyricIdx then
+                    lastLyricIdx = idx
+                    Ctl.lyric:Seek(st.pos or 0)
+                end
+            end
+        end
+    end)
+
+    function Ctl.destroy()
+        Ctl.alive = false
+    end
+    function Ctl.setVolume(v) Ctl.volume = v engine.SetVolume(v) P:SetVolume(v) end
+
+    if opts.AutoLiked then Ctl.loadLiked() end
+    target:ShowPanel(P_SONG)
+    log("bind ok: " .. tostring(engine.name or "engine"))
+    return Ctl
+end
+
+-- ── 网易云快捷绑定：BindNetease(target, opts) ────────────────────
+-- 引擎不存在时返回 nil + 原因，不会报错
+function MusicUI.BindNetease(target, opts)
+    local g = (getgenv and getgenv()) or _G
+    local ncm = g and g.NCM
+    if not ncm then
+        return nil, "getgenv().NCM 不存在：先加载 netease-engine.lua（可设 NCM_OPTIONS={Headless=true} 只跑引擎）"
+    end
+    local engine, err = MusicUI.neteaseEngine(ncm)
+    if not engine then return nil, err end
+    return MusicUI.BindEngine(target, engine, opts)
+end
 function MusicUI.Attach(cls)
     if type(cls) ~= "table" then
         error("[MusicUI] Attach(QuantumUI) 需要传入 QuantumUI 类表")
