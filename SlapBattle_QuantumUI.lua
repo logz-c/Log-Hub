@@ -1,29 +1,31 @@
 --[[
-    Slap Battle 辅助脚本 (Quantum UI 版)  v1.0
+    Slap Battle 辅助脚本 (Quantum UI 版)  v2.0
 
     适配 PlaceId: 6403373529 (Slap Battles / 打耳光大战)
-    Hub 注册的其它实例: 同作者其它小游戏地图
 
-    ── 真实远程 (游戏内实测存在) ──────────────────────────────────────
-      ReplicatedStorage.GeneralHit      ← 主拍击远程  :FireServer(part)
-      ReplicatedStorage.GeneralAbility  ← 手套技能    :FireServer(...)
-      ReplicatedStorage.SelfKnockback   ← 自身击退
-      ReplicatedStorage.Counter         ← 反击
-      ReplicatedStorage.b               ← 老版本远程 (仍保留, 作为回退)
-      调用签名取自公开 SlapAura 源码:  hitRemote:FireServer(targetPart)
-      (targetPart 取受害者角色里的某个 BasePart, 优先 HumanoidRootPart)
+    ── 源码来源 (本版功能 100% 照搬) ────────────────────────────────
+       flamingrobot/slap-battle 的 "Slap GUI By Mr.Exploit" (明文 550 行)
+       实机交叉确认: ReplicatedStorage.b 与 GeneralHit 都在; 地图有 DEATHBARRIER。
+       所有功能直接移植自该源码, 仅把裸 GUI 换成 QuantumUI 控件。
 
-    ── 游戏内部结构 (实测) ───────────────────────────────────────────
-      workspace.DEATHBARRIER            ← 掉下去即死 (地图边缘虚空)
-      character 里的手套 = Tool.<手套名>, 内含 Glove 部件
-      LocalPlayer.Backpack 里是当前手套 Tool
+    ── 源码里的功能 (全部实现) ──────────────────────────────────────
+      [God Mode]   销毁角色上的 Ragdolled / isInArena / TSVulnerability /
+                   IsInDefaultArena (需先进入岛屿), 解除布娃娃与受击判定
+      [Kill Aura]  "Big auto kill box": 删掉角色里除 Animate 外的 LocalScript,
+                   手套放大到 30³, 焊一个 30³ 透明 neon 部件, 靠 Touched
+                   触发 b:FireServer(hit); 跳过带 Reverse 的玩家; 死亡自动关
+      [Speed]      把 Humanoid 改名为 "_ _ _" 后设 WalkSpeed (绕过名称检查)
+      [JumpPower]  设 JumpPower
+      [Gravity]    设 workspace.Gravity
+      [No TimeFreeze] 角色变化时被锚定的部件自动解除锚定 (防卡)
+      [Tp Starter/Pro/Lobby] 硬编码 CFrame 瞬移 (源码原值)
+      [Tp to Player] 按名字瞬移到玩家
+      [Force Reset] 瞬移到 DEATHBARRIER 强制死亡重生 (清 ragdoll)
+      [Delete Gui]  卸载清理
 
-    ── 本脚本功能 ───────────────────────────────────────────────────
-      战斗: Slap Aura(范围拍所有人) / Auto Slap(只拍最近) / 拍击范围 /
-            拍击间隔 / 一键拍最近(E) / 拍所有人(按钮) / 手套技能(T)
-      生存: Anti-Void(掉虚空自动拉回) / 防击飞(实验) / 自动重新装备手套
-      玩家: ESP(头顶名牌) / 移速 / 跳跃 / 无限跳 / 穿墙 / 飞行
-      杂项: 防挂机 / 主题 / 彩虹边框 / 卸载
+    ── 额外补充 (源码没有, 但无害实用) ──────────────────────────────
+      ESP(头顶名牌) / 飞行 / 穿墙 / 无限跳 / Anti-Void(掉虚空拉回) /
+      自动重装手套 / 防挂机 / 主题 / 彩虹边框
 
     ── 免责 ────────────────────────────────────────────────────────
       仅本地逻辑, 不采集信息、不 loadstring 任何外部功能代码
@@ -113,30 +115,33 @@ local hasDrawing = (type(Drawing) == "table" and type(Drawing.new) == "function"
 -- 3. SETTINGS
 -- ══════════════════════════════════════════════════════════════════
 local SETTINGS = {
-    -- 战斗
-    SB_SlapAura      = false,
-    SB_AutoSlap      = false,
-    SB_SlapReach     = 30,
-    SB_SlapInterval  = 0.1,
-    SB_SlapOnClick   = false,
+    -- 战斗 (源码功能)
+    SB_KillAura      = false,
+    SB_GodMode       = false,   -- 按钮触发, 这里仅作状态显示
+
+    -- 移动 (源码功能)
+    SB_SpeedEnabled  = false,
+    SB_Speed         = 50,
+    SB_JumpEnabled   = false,
+    SB_Jump          = 100,
+    SB_GravityEnabled = false,
+    SB_Gravity       = 196,
+    SB_NoTimeFreeze  = false,
 
     -- 生存
     SB_AntiVoid      = false,
     SB_SafeY         = -20,
-    SB_AntiKnockback = false,
     SB_AutoReGlove   = false,
 
     -- 玩家
     SB_ESP           = false,
     SB_ESPColor      = Color3.fromRGB(255, 80, 160),
-    SB_WalkSpeedEnabled = false,
-    SB_WalkSpeed     = 50,
-    SB_JumpPowerEnabled = false,
-    SB_JumpPower     = 100,
-    SB_InfJump       = false,
-    SB_Noclip        = false,
+
+    -- 特殊移动 (补充)
     SB_Fly           = false,
     SB_FlySpeed      = 80,
+    SB_Noclip        = false,
+    SB_InfJump       = false,
 
     -- 杂项
     SB_AntiAFK       = false,
@@ -149,13 +154,14 @@ local Window = nil
 local isDestroyed = false
 
 local mainConn, noclipConn, infJumpConn, flyConn, idledConn,
-      charAddedConn, espConn, voidConn, knockConn, inputConn
+      charAddedConn, espConn, voidConn, freezeConn, inputConn
 local flyBV, flyBG
 local espFolder, espObjects = nil, {}
 local lastSafeCFrame = nil
 
 local hitRemote, abilityRemote = nil, nil
-local lastSlap = 0
+local auraState = { parts = {}, glove = nil, originalSize = nil, active = false }
+local speedRenamed = false
 local slapCount = 0
 local selectedPlayer = nil
 
@@ -199,20 +205,13 @@ local function getRoot()
     return c:FindFirstChild("HumanoidRootPart") or c.PrimaryPart
 end
 
-local function getGuiParent()
-    local ok, res = pcall(function() return CoreGui end)
-    if ok and res then return res end
-    return LocalPlayer:WaitForChild("PlayerGui")
-end
-
 -- ══════════════════════════════════════════════════════════════════
--- 6. 远程获取
---    GeneralHit 是主拍击远程; 回退到老远程 b; 再回退到动态扫描
---    手套 LocalScript 常量 (14ms-alt SlapAura 的做法)。
---    签名: hitRemote:FireServer(targetPart)
+-- 6. 远程获取 (源码用 b, 回退 GeneralHit, 再回退动态扫)
+--    签名: hitRemote:FireServer(hitPart)  (hitPart = 受害者身上的 BasePart)
 -- ══════════════════════════════════════════════════════════════════
 local function findHitRemoteStatic()
-    local candidates = { "GeneralHit", "b", "Hit", "Slap" }
+    -- 源码明确用 ReplicatedStorage.b, 优先; 当前版本另有 GeneralHit
+    local candidates = { "b", "GeneralHit", "Hit", "Slap" }
     for _, n in ipairs(candidates) do
         local r = ReplicatedStorage:FindFirstChild(n)
         if r and r:IsA("RemoteEvent") then
@@ -222,7 +221,6 @@ local function findHitRemoteStatic()
     return nil
 end
 
--- 动态: 扫当前装备手套的 LocalScript 常量, 匹配 ReplicatedStorage 里的 RemoteEvent
 local function findHitRemoteDynamic()
     local gc = getgc
     if type(gc) ~= "function" then return nil end
@@ -281,105 +279,183 @@ print(string.format("[SlapBattle] 远程: Hit=%s Ability=%s",
     abilityRemote and abilityRemote.Name or "未找到"))
 
 -- ══════════════════════════════════════════════════════════════════
--- 7. 拍击逻辑
+-- 7. GOD MODE (源码原样: 删角色上的布娃娃/受击判定实例)
 -- ══════════════════════════════════════════════════════════════════
-local function getPartOf(targetChar)
-    if not targetChar then return nil end
-    local root = targetChar:FindFirstChild("HumanoidRootPart")
-    if root then return root end
-    return targetChar:FindFirstChildWhichIsA("BasePart")
-end
-
-local function fireSlap(targetChar)
-    if not hitRemote or not targetChar or isDestroyed then return false end
-    local part = getPartOf(targetChar)
-    if not part then return false end
-    -- 签名: :FireServer(part)  —— 仅一个参数, 受害者身上的 BasePart
-    local ok = pcall(function() hitRemote:FireServer(part) end)
-    if ok then
-        slapCount = slapCount + 1
+local function doGodMode()
+    local char = getChar()
+    if not char then
+        notify("God Mode", "角色不存在", 2, "Warning")
+        return
     end
-    return ok
+    local rag = char:FindFirstChild("Ragdolled")
+    local isInArena = char:FindFirstChild("isInArena")
+    if rag and isInArena then
+        local inArena = true
+        pcall(function() inArena = (isInArena:IsA("BoolValue") and isInArena.Value == true) or true end)
+        if inArena then
+            pcall(function() rag:Destroy() end)
+            pcall(function() isInArena:Destroy() end)
+            pcall(function()
+                local t = char:FindFirstChild("TSVulnerability")
+                if t then t:Destroy() end
+            end)
+            pcall(function()
+                local i = char:FindFirstChild("IsInDefaultArena")
+                if i then i:Destroy() end
+            end)
+            notify("God Mode", "已开启 (布娃娃/受击判定已移除)", 3, "Success")
+        else
+            notify("God Mode", "需先进入岛屿才能开 God Mode", 3, "Warning")
+        end
+    else
+        notify("God Mode", "未检测到 arena 标记, 请先进入岛屿", 3, "Warning")
+    end
 end
 
-local function slapAllInRange()
-    local root = getRoot()
-    if not root then return end
-    local reach = SETTINGS.SB_SlapReach or 30
-    for _, p in ipairs(Players:GetPlayers()) do
-        if p ~= LocalPlayer and p.Character then
-            local part = getPartOf(p.Character)
-            if part and root and (part.Position - root.Position).Magnitude <= reach then
-                fireSlap(p.Character)
-            end
+-- ══════════════════════════════════════════════════════════════════
+-- 8. KILL AURA (源码原样: 删 LocalScript + 放大手套 + 焊透明部件 + Touched)
+-- ══════════════════════════════════════════════════════════════════
+local function disableKillAura()
+    for _, p in ipairs(auraState.parts) do
+        pcall(function() p:Destroy() end)
+    end
+    auraState.parts = {}
+    if auraState.glove and auraState.originalSize then
+        pcall(function() auraState.glove.Size = auraState.originalSize end)
+    end
+    auraState.active = false
+    auraState.glove = nil
+    auraState.originalSize = nil
+end
+
+local function enableKillAura()
+    local char = getChar()
+    if not char then
+        notify("Kill Aura", "角色不存在", 2, "Warning")
+        return false
+    end
+    -- 删掉角色里除 Animate 外的所有 LocalScript (关掉手套自身冷却逻辑)
+    for _, v in ipairs(char:GetChildren()) do
+        if v:IsA("LocalScript") and v.Name ~= "Animate" then
+            pcall(function() v:Destroy() end)
         end
     end
-end
 
-local function slapNearest()
-    local root = getRoot()
-    if not root then return false end
-    local reach = SETTINGS.SB_SlapReach or 30
-    local best, bestDist = nil, math.huge
-    for _, p in ipairs(Players:GetPlayers()) do
-        if p ~= LocalPlayer and p.Character then
-            local part = getPartOf(p.Character)
-            if part then
-                local d = (part.Position - root.Position).Magnitude
-                if d < bestDist and d <= reach then
-                    bestDist = d
-                    best = p.Character
+    local tool = char:FindFirstChildOfClass("Tool")
+    if not tool then
+        notify("Kill Aura", "需要装备手套(Tool)才能开", 2, "Warning")
+        return false
+    end
+
+    local glove = tool:FindFirstChild("Glove")
+    if glove then
+        auraState.glove = glove
+        auraState.originalSize = glove.Size
+        pcall(function() glove.Size = Vector3.new(30, 30, 30) end)
+        pcall(function() glove.Massless = true end)
+    end
+
+    -- 焊一个 30³ 透明 neon 部件到手套, 靠 Touched 触发拍击
+    local pt = Instance.new("Part")
+    pt.Anchored = true
+    pt.Parent = tool
+    pt.Size = Vector3.new(30, 30, 30)
+    if glove then pcall(function() pt.CFrame = glove.CFrame end) end
+    local wd = Instance.new("WeldConstraint", pt)
+    wd.Part0 = glove or tool
+    wd.Part1 = pt
+    pt.CanCollide = false
+    pt.Transparency = 0.6
+    pt.Material = Enum.Material.Neon
+    pt.Anchored = false
+    pt.CastShadow = false
+    pt.Massless = true
+    auraState.parts[#auraState.parts + 1] = pt
+
+    local cool = false
+    pt.Touched:Connect(function(hit)
+        if isDestroyed or not auraState.active then return end
+        if hit and hit.Parent then
+            local parent = hit.Parent
+            if parent:FindFirstChild("Humanoid") and parent ~= char then
+                -- 跳过带 Reverse 的玩家 (互相拍会被反)
+                if parent:FindFirstChild("Reverse") == nil then
+                    if not cool then
+                        cool = true
+                        local rem = hitRemote or ReplicatedStorage:FindFirstChild("b")
+                        pcall(function() rem:FireServer(hit) end)
+                        cool = false
+                    end
                 end
             end
         end
+    end)
+
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    if hum then
+        hum.Died:Connect(function()
+            auraState.active = false
+        end)
     end
-    if best then
-        return fireSlap(best)
-    end
-    return false
+
+    auraState.active = true
+    return true
 end
 
-local function combatStep()
-    if isDestroyed then return end
-    if not (SETTINGS.SB_SlapAura or SETTINGS.SB_AutoSlap) then return end
-    local now = tick()
-    if now - lastSlap < (SETTINGS.SB_SlapInterval or 0.1) then return end
-    lastSlap = now
-
-    if SETTINGS.SB_SlapAura then
-        slapAllInRange()
-    elseif SETTINGS.SB_AutoSlap then
-        slapNearest()
+local function setKillAura(enabled)
+    if enabled then
+        if auraState.active then return end
+        local ok = enableKillAura()
+        if not ok then
+            -- 没装备手套, 回退开关
+            SETTINGS.SB_KillAura = false
+            if Window and Window.Flags and Window.Flags["SB_KillAura"] then
+                pcall(function() Window.Flags["SB_KillAura"]:Set(false) end)
+            end
+        end
+    else
+        disableKillAura()
+        notify("Kill Aura", "已关闭 (被删的 LocalScript 需重生才恢复)", 3, "Info")
     end
-end
-
-local function fireAbility()
-    if not abilityRemote then
-        -- 回退: 有些手套技能也走 GeneralHit 同族, 这里只尝试 GeneralAbility
-        return false
-    end
-    local ok = pcall(function() abilityRemote:FireServer() end)
-    if not ok then
-        ok = pcall(function() abilityRemote:Fire() end)
-    end
-    return ok
 end
 
 -- ══════════════════════════════════════════════════════════════════
--- 8. 移动 (与 BladeBall 同款, 游戏无关)
+-- 9. 移动 (源码: Speed 改名绕过 + Jump + Gravity; 补充 Fly/Noclip/InfJump)
 -- ══════════════════════════════════════════════════════════════════
+local function applySpeed()
+    local hum = getHum()
+    if not hum then return end
+    if not speedRenamed then
+        pcall(function() hum.Name = "_ _ _" end)
+        speedRenamed = true
+    end
+    pcall(function() hum.WalkSpeed = SETTINGS.SB_Speed end)
+end
+
 local function movementStep()
     if isDestroyed then return end
     local hum = getHum()
     if not hum then return end
-    if SETTINGS.SB_WalkSpeedEnabled and hum.WalkSpeed ~= SETTINGS.SB_WalkSpeed then
-        pcall(function() hum.WalkSpeed = SETTINGS.SB_WalkSpeed end)
+
+    if SETTINGS.SB_SpeedEnabled then
+        applySpeed()
+    else
+        if speedRenamed then
+            pcall(function() hum.WalkSpeed = 16 end)
+        end
     end
-    if SETTINGS.SB_JumpPowerEnabled then
+
+    if SETTINGS.SB_JumpEnabled then
         pcall(function()
             hum.UseJumpPower = true
-            hum.JumpPower = SETTINGS.SB_JumpPower
+            hum.JumpPower = SETTINGS.SB_Jump
         end)
+    end
+
+    if SETTINGS.SB_GravityEnabled then
+        pcall(function() Workspace.Gravity = SETTINGS.SB_Gravity end)
+    elseif Workspace.Gravity ~= 196 then
+        pcall(function() Workspace.Gravity = 196 end)
     end
 end
 
@@ -467,7 +543,81 @@ local function toggleFly(enabled, speed)
 end
 
 -- ══════════════════════════════════════════════════════════════════
--- 9. 生存: Anti-Void / 防击飞 / 自动重装手套
+-- 10. NO TIME FREEZE (源码: 角色被锚定时自动解除)
+-- ══════════════════════════════════════════════════════════════════
+local function toggleNoTimeFreeze(enabled)
+    if freezeConn then freezeConn:Disconnect() freezeConn = nil end
+    if not enabled then return end
+    freezeConn = LocalPlayer.CharacterAdded:Connect(function(char)
+        local conn
+        conn = char.Changed:Connect(function()
+            if isDestroyed or not SETTINGS.SB_NoTimeFreeze then
+                if conn then pcall(function() conn:Disconnect() end) end
+                return
+            end
+            for _, v in ipairs(char:GetChildren()) do
+                if v:IsA("BasePart") then
+                    pcall(function() v.Anchored = false end)
+                end
+            end
+        end)
+    end)
+end
+
+-- ══════════════════════════════════════════════════════════════════
+-- 11. 传送 (源码硬编码 CFrame + 按名字传送到玩家)
+-- ══════════════════════════════════════════════════════════════════
+local TP_STARTER = CFrame.new(122.187042, 359.984283, -0.974518955, -0.0461894758, -2.20339125e-09, -0.998932719, -1.18904417e-07, 1, 3.29225514e-09, 0.998932719, 1.18929577e-07, -0.0461894758)
+local TP_PRO     = CFrame.new(53.2623177, -5.17293787, -6.4983449, 0.988194346, -4.27591935e-08, -0.153205544, 3.84768093e-08, 1, -3.09168371e-08, 0.153205544, 2.4656984e-08, 0.988194346)
+local TP_LOBBY   = CFrame.new(-353.03006, 326.234283, -1.99629986, 0.293333888, 2.33903688e-08, 0.956010044, 5.62207632e-08, 1, -4.17169481e-08, -0.956010044, 6.5984608e-08, 0.293333888)
+
+local function tpCFrame(cf)
+    local char = getChar()
+    if not char then return false end
+    local ok = pcall(function() char:SetPrimaryPartCFrame(cf) end)
+    if not ok then
+        local root = getRoot()
+        if root then pcall(function() root.CFrame = cf end) end
+    end
+    return true
+end
+
+local function tpToPlayer(name)
+    if not name or name == "" then
+        notify("Tp", "请先选择/输入玩家", 2, "Warning")
+        return
+    end
+    local target = Players:FindFirstChild(name)
+    if not target or not target.Character then
+        notify("Tp", "找不到玩家: " .. tostring(name), 2, "Error")
+        return
+    end
+    local tr = target.Character:FindFirstChild("HumanoidRootPart") or target.Character.PrimaryPart
+    local root = getRoot()
+    if tr and root then
+        local off = Vector3.new(math.random(-3, 3), 0, math.random(-3, 3))
+        pcall(function() root.CFrame = CFrame.new(tr.Position + off) end)
+        notify("Tp", "已传送到 " .. name, 2, "Success")
+    else
+        notify("Tp", "传送失败", 2, "Error")
+    end
+end
+
+local function forceReset()
+    local char = getChar()
+    if not char then return end
+    local db = Workspace:FindFirstChild("DEATHBARRIER")
+    if db then
+        pcall(function() char:MoveTo(db.Position) end)
+        notify("Force Reset", "已瞬移到 DEATHBARRIER (强制重生)", 2, "Info")
+    else
+        pcall(function() char:BreakJoints() end)
+        notify("Force Reset", "无 DEATHBARRIER, 直接解体", 2, "Info")
+    end
+end
+
+-- ══════════════════════════════════════════════════════════════════
+-- 12. 生存: Anti-Void / 自动重装手套
 -- ══════════════════════════════════════════════════════════════════
 local function survivalStep()
     if isDestroyed then return end
@@ -475,19 +625,16 @@ local function survivalStep()
     local hum = getHum()
     if not root then return end
 
-    -- 记录安全位置 (站在地面/岛上时)
     if hum and hum.Health > 0 and root.Position.Y > (SETTINGS.SB_SafeY or -20) + 5 then
         lastSafeCFrame = root.CFrame
     end
 
-    -- Anti-Void: 掉到安全线以下, 拉回最后的安全点
     if SETTINGS.SB_AntiVoid and lastSafeCFrame then
         if root.Position.Y < (SETTINGS.SB_SafeY or -20) then
             pcall(function() root.CFrame = lastSafeCFrame end)
         end
     end
 
-    -- 自动重装手套: 角色没有 Tool 但背包有, 装备上
     if SETTINGS.SB_AutoReGlove and hum then
         local char = LocalPlayer.Character
         if char and not char:FindFirstChildOfClass("Tool") then
@@ -502,22 +649,8 @@ local function survivalStep()
     end
 end
 
-local function toggleAntiKnockback(enabled)
-    if knockConn then knockConn:Disconnect() knockConn = nil end
-    if not enabled then return end
-    -- 被击飞时 root 速度会瞬间很大; 检测到就归零 (飞行时不生效)
-    knockConn = RunService.Stepped:Connect(function()
-        if isDestroyed or SETTINGS.SB_Fly then return end
-        local root = getRoot()
-        if not root then return end
-        if root.Velocity.Magnitude > 55 then
-            pcall(function() root.Velocity = Vector3.zero end)
-        end
-    end)
-end
-
 -- ══════════════════════════════════════════════════════════════════
--- 10. ESP (BillboardGui 头顶名牌, 无需 Drawing)
+-- 13. ESP (BillboardGui 头顶名牌, 无需 Drawing)
 -- ══════════════════════════════════════════════════════════════════
 local function ensureEspFolder()
     if espFolder and espFolder.Parent then return espFolder end
@@ -577,14 +710,11 @@ local function updateESP()
         return
     end
     local root = getRoot()
-    -- 新增 / 更新
     for _, p in ipairs(Players:GetPlayers()) do
         if p ~= LocalPlayer then
             local char = p.Character
             if char and char:FindFirstChild("HumanoidRootPart") then
-                if not espObjects[p] then
-                    makeEsp(p)
-                end
+                if not espObjects[p] then makeEsp(p) end
                 local data = espObjects[p]
                 if data and data.label and root then
                     local part = char:FindFirstChild("HumanoidRootPart")
@@ -594,7 +724,6 @@ local function updateESP()
             end
         end
     end
-    -- 移除已离开 / 无角色的
     for p, data in pairs(espObjects) do
         local char = p.Character
         if (not char) or (not char:FindFirstChild("HumanoidRootPart")) then
@@ -605,7 +734,7 @@ local function updateESP()
 end
 
 -- ══════════════════════════════════════════════════════════════════
--- 11. 杂项工具
+-- 14. 杂项工具
 -- ══════════════════════════════════════════════════════════════════
 local function setupAntiAFK()
     local gc = getconnections or get_signal_cons
@@ -638,6 +767,38 @@ local function refreshPlayerList()
     return out
 end
 
+local function fireAbility()
+    if not abilityRemote then return false end
+    local ok = pcall(function() abilityRemote:FireServer() end)
+    if not ok then ok = pcall(function() abilityRemote:Fire() end) end
+    return ok
+end
+
+local function slapNearest()
+    local root = getRoot()
+    if not root then return false end
+    local best, bestDist = nil, math.huge
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p ~= LocalPlayer and p.Character then
+            local part = p.Character:FindFirstChild("HumanoidRootPart")
+            if part then
+                local d = (part.Position - root.Position).Magnitude
+                if d < bestDist then
+                    bestDist = d
+                    best = part
+                end
+            end
+        end
+    end
+    if best then
+        local rem = hitRemote or ReplicatedStorage:FindFirstChild("b")
+        local ok = pcall(function() rem:FireServer(best) end)
+        if ok then slapCount = slapCount + 1 end
+        return ok
+    end
+    return false
+end
+
 local THEME_PRESETS = {
     ["Pink"]    = Color3.fromRGB(255, 80, 160),
     ["Cyan"]    = Color3.fromRGB(0, 200, 255),
@@ -649,14 +810,14 @@ local THEME_PRESETS = {
 }
 
 -- ══════════════════════════════════════════════════════════════════
--- 12. 构建 UI
+-- 15. 构建 UI
 -- ══════════════════════════════════════════════════════════════════
 Window = QuantumUI.new({
     Title        = "Slap Battle",
-    Subtitle     = "打耳光大战 v1.0",
+    Subtitle     = "打耳光大战 v2.0 (源码移植)",
     ThemeColor   = Color3.fromRGB(255, 80, 160),
     Transparency = 0.3,
-    Size         = UDim2.new(0, 640, 0, 600),
+    Size         = UDim2.new(0, 640, 0, 620),
     Keybind      = Enum.KeyCode.RightShift,
 })
 
@@ -664,60 +825,34 @@ _G.QuantumUI_Window = Window
 
 task.wait(3.5)
 
--- ── TAB 1: 战斗 ─────────────────────────────────────────────────
+-- ── TAB 1: 战斗 (源码功能) ───────────────────────────────────────
 local CombatTab = Window:AddTab({ Name = "战斗", Icon = "rbxassetid://6034287594" })
 
-CombatTab:AddSection({ Name = "拍击" })
+CombatTab:AddSection({ Name = "Kill Aura (源码: 放大手套+焊透明部件)" })
 
 CombatTab:AddToggle({
-    Name = "Slap Aura (范围拍所有人)", Default = false, Flag = "SB_SlapAura",
+    Name = "Kill Aura (大击杀盒)", Default = false, Flag = "SB_KillAura",
     Callback = function(s)
-        SETTINGS.SB_SlapAura = s
-        if s then SETTINGS.SB_AutoSlap = false end
-        notify("Slap Aura", s and "已开启" or "已关闭", 2, s and "Success" or "Info")
+        SETTINGS.SB_KillAura = s
+        setKillAura(s)
+        if s then notify("Kill Aura", "已开启 (需装备手套)", 2, "Success") end
     end,
 })
 
-CombatTab:AddToggle({
-    Name = "Auto Slap (只拍最近)", Default = false, Flag = "SB_AutoSlap",
-    Callback = function(s)
-        SETTINGS.SB_AutoSlap = s
-        if s then SETTINGS.SB_SlapAura = false end
-        notify("Auto Slap", s and "已开启" or "已关闭", 2, s and "Success" or "Info")
+CombatTab:AddButton({
+    Name = "God Mode (删布娃娃/受击判定)",
+    Callback = function()
+        doGodMode()
     end,
 })
 
-CombatTab:AddSlider({
-    Name = "拍击范围", Min = 5, Max = 60, Default = 30, Increment = 1,
-    Suffix = " studs", Flag = "SB_SlapReach",
-    Callback = function(v) SETTINGS.SB_SlapReach = v end,
-})
-
-CombatTab:AddSlider({
-    Name = "拍击间隔 (节流)", Min = 0.02, Max = 1, Default = 0.1, Increment = 0.01,
-    Suffix = "s", Flag = "SB_SlapInterval",
-    Callback = function(v) SETTINGS.SB_SlapInterval = v end,
-})
-
-CombatTab:AddSection({ Name = "手动 / 技能" })
+CombatTab:AddSection({ Name = "手动" })
 
 CombatTab:AddButton({
     Name = "拍最近的人 (E)",
     Callback = function()
         local ok = slapNearest()
         notify("Slap", ok and "已拍击最近目标" or "无目标 / 远程不可用", 2, ok and "Success" or "Warning")
-    end,
-})
-
-CombatTab:AddButton({
-    Name = "拍范围内所有人 (一次性)",
-    Callback = function()
-        if not hitRemote then
-            notify("Slap", "拍击远程未找到", 2, "Error")
-            return
-        end
-        slapAllInRange()
-        notify("Slap", "已对范围内所有人发送拍击", 2, "Success")
     end,
 })
 
@@ -748,23 +883,149 @@ task.spawn(function()
     end
 end)
 
-CombatTab:AddButton({
-    Name = "重新探测拍击远程",
-    Callback = function()
-        refreshRemotes()
-        notify("SlapBattle", string.format("Hit=%s Ability=%s",
-            hitRemote and hitRemote.Name or "未找到",
-            abilityRemote and abilityRemote.Name or "未找到"), 3, "Info")
+-- ── TAB 2: 移动 (源码功能) ───────────────────────────────────────
+local MoveTab = Window:AddTab({ Name = "移动", Icon = "rbxassetid://6034466796" })
+
+MoveTab:AddSection({ Name = "Speed (源码: 改名绕过)" })
+
+MoveTab:AddToggle({
+    Name = "Speed 开启", Default = false, Flag = "SB_SpeedEnabled",
+    Callback = function(s) SETTINGS.SB_SpeedEnabled = s end,
+})
+
+MoveTab:AddSlider({
+    Name = "Speed 数值", Min = 16, Max = 200, Default = 50, Increment = 1,
+    Suffix = "", Flag = "SB_Speed",
+    Callback = function(v) SETTINGS.SB_Speed = v end,
+})
+
+MoveTab:AddSection({ Name = "JumpPower" })
+
+MoveTab:AddToggle({
+    Name = "JumpPower 开启", Default = false, Flag = "SB_JumpEnabled",
+    Callback = function(s) SETTINGS.SB_JumpEnabled = s end,
+})
+
+MoveTab:AddSlider({
+    Name = "JumpPower 数值", Min = 50, Max = 300, Default = 100, Increment = 1,
+    Suffix = "", Flag = "SB_Jump",
+    Callback = function(v) SETTINGS.SB_Jump = v end,
+})
+
+MoveTab:AddSection({ Name = "Gravity" })
+
+MoveTab:AddToggle({
+    Name = "Gravity 开启", Default = false, Flag = "SB_GravityEnabled",
+    Callback = function(s)
+        SETTINGS.SB_GravityEnabled = s
+        if not s then pcall(function() Workspace.Gravity = 196 end) end
     end,
 })
 
--- ── TAB 2: 生存 ─────────────────────────────────────────────────
-local SurviveTab = Window:AddTab({ Name = "生存", Icon = "rbxassetid://6035153470" })
+MoveTab:AddSlider({
+    Name = "Gravity 数值", Min = 0, Max = 500, Default = 196, Increment = 1,
+    Suffix = "", Flag = "SB_Gravity",
+    Callback = function(v) SETTINGS.SB_Gravity = v end,
+})
 
-SurviveTab:AddSection({ Name = "防掉虚空" })
+MoveTab:AddToggle({
+    Name = "No TimeFreeze (解除锚定)", Default = false, Flag = "SB_NoTimeFreeze",
+    Callback = function(s)
+        SETTINGS.SB_NoTimeFreeze = s
+        toggleNoTimeFreeze(s)
+        notify("No TimeFreeze", s and "已开启" or "已关闭", 2, "Info")
+    end,
+})
+
+MoveTab:AddSection({ Name = "特殊移动 (补充)" })
+
+MoveTab:AddToggle({
+    Name = "穿墙", Default = false, Flag = "SB_Noclip",
+    Callback = function(s)
+        SETTINGS.SB_Noclip = s
+        toggleNoclip(s)
+        notify("NoClip", s and "ON" or "OFF", 1.5, "Info")
+    end,
+})
+
+MoveTab:AddToggle({
+    Name = "无限跳", Default = false, Flag = "SB_InfJump",
+    Callback = function(s)
+        SETTINGS.SB_InfJump = s
+        toggleInfJump(s)
+    end,
+})
+
+MoveTab:AddToggle({
+    Name = "飞行", Default = false, Flag = "SB_Fly",
+    Callback = function(s)
+        SETTINGS.SB_Fly = s
+        toggleFly(s, SETTINGS.SB_FlySpeed)
+        notify("Fly", s and "ON" or "OFF", 1.5, "Info")
+    end,
+})
+
+MoveTab:AddSlider({
+    Name = "飞行速度", Min = 20, Max = 300, Default = 80, Increment = 5,
+    Suffix = "", Flag = "SB_FlySpeed",
+    Callback = function(v) SETTINGS.SB_FlySpeed = v end,
+})
+
+-- ── TAB 3: 传送 (源码硬编码点 + 按名传) ─────────────────────────
+local TpTab = Window:AddTab({ Name = "传送", Icon = "rbxassetid://6035153470" })
+
+TpTab:AddSection({ Name = "固定地点 (源码 CFrame)" })
+
+TpTab:AddButton({
+    Name = "传送到 Starter Island",
+    Callback = function() tpCFrame(TP_STARTER) notify("Tp", "Starter Island", 2, "Success") end,
+})
+
+TpTab:AddButton({
+    Name = "传送到 Pro Island",
+    Callback = function() tpCFrame(TP_PRO) notify("Tp", "Pro Island", 2, "Success") end,
+})
+
+TpTab:AddButton({
+    Name = "传送到 Lobby",
+    Callback = function() tpCFrame(TP_LOBBY) notify("Tp", "Lobby", 2, "Success") end,
+})
+
+TpTab:AddSection({ Name = "传送到玩家" })
+
+local playerDropdown = TpTab:AddDropdown({
+    Name = "玩家列表", Items = refreshPlayerList(), Flag = "SB_SelectedPlayer",
+    Callback = function(v) selectedPlayer = v end,
+})
+
+TpTab:AddButton({
+    Name = "刷新玩家列表",
+    Callback = function()
+        local items = refreshPlayerList()
+        if playerDropdown and playerDropdown.Refresh then
+            pcall(function() playerDropdown:Refresh(items) end)
+        end
+        notify("SlapBattle", "共 " .. #items .. " 名其他玩家", 2, "Info")
+    end,
+})
+
+TpTab:AddButton({
+    Name = "传送到选中玩家",
+    Callback = function() tpToPlayer(selectedPlayer) end,
+})
+
+TpTab:AddSection({ Name = "重置" })
+
+TpTab:AddButton({
+    Name = "Force Reset (瞬移 DEATHBARRIER 重生)",
+    Callback = function() forceReset() end,
+})
+
+-- ── TAB 4: 生存 ─────────────────────────────────────────────────
+local SurviveTab = Window:AddTab({ Name = "生存", Icon = "rbxassetid://6034466796" })
 
 SurviveTab:AddToggle({
-    Name = "Anti-Void (掉下去自动拉回)", Default = false, Flag = "SB_AntiVoid",
+    Name = "Anti-Void (掉虚空自动拉回)", Default = false, Flag = "SB_AntiVoid",
     Callback = function(s)
         SETTINGS.SB_AntiVoid = s
         notify("Anti-Void", s and "已开启" or "已关闭", 2, s and "Success" or "Info")
@@ -777,26 +1038,13 @@ SurviveTab:AddSlider({
     Callback = function(v) SETTINGS.SB_SafeY = v end,
 })
 
-SurviveTab:AddSection({ Name = "抗性与手套" })
-
-SurviveTab:AddToggle({
-    Name = "防击飞 / 稳定 (实验)", Default = false, Flag = "SB_AntiKnockback",
-    Callback = function(s)
-        SETTINGS.SB_AntiKnockback = s
-        toggleAntiKnockback(s)
-        notify("Anti-Knockback", s and "已开启(实验)" or "已关闭", 2, s and "Warning" or "Info")
-    end,
-})
-
 SurviveTab:AddToggle({
     Name = "自动重新装备手套", Default = false, Flag = "SB_AutoReGlove",
     Callback = function(s) SETTINGS.SB_AutoReGlove = s end,
 })
 
--- ── TAB 3: 玩家 ─────────────────────────────────────────────────
-local PlayerTab = Window:AddTab({ Name = "玩家", Icon = "rbxassetid://6034466796" })
-
-PlayerTab:AddSection({ Name = "ESP" })
+-- ── TAB 5: 玩家 ─────────────────────────────────────────────────
+local PlayerTab = Window:AddTab({ Name = "玩家", Icon = "rbxassetid://6035153470" })
 
 PlayerTab:AddToggle({
     Name = "ESP (头顶名牌 + 距离)", Default = false, Flag = "SB_ESP",
@@ -816,116 +1064,8 @@ PlayerTab:AddColorPicker({
     end,
 })
 
-PlayerTab:AddSection({ Name = "基础移动" })
-
-PlayerTab:AddToggle({
-    Name = "移速开启", Default = false, Flag = "SB_WalkSpeedEnabled",
-    Callback = function(s) SETTINGS.SB_WalkSpeedEnabled = s end,
-})
-
-PlayerTab:AddSlider({
-    Name = "移速", Min = 16, Max = 200, Default = 50, Increment = 1,
-    Suffix = "", Flag = "SB_WalkSpeed",
-    Callback = function(v) SETTINGS.SB_WalkSpeed = v end,
-})
-
-PlayerTab:AddToggle({
-    Name = "跳跃力开启", Default = false, Flag = "SB_JumpPowerEnabled",
-    Callback = function(s) SETTINGS.SB_JumpPowerEnabled = s end,
-})
-
-PlayerTab:AddSlider({
-    Name = "跳跃力", Min = 50, Max = 300, Default = 100, Increment = 1,
-    Suffix = "", Flag = "SB_JumpPower",
-    Callback = function(v) SETTINGS.SB_JumpPower = v end,
-})
-
-PlayerTab:AddToggle({
-    Name = "无限跳", Default = false, Flag = "SB_InfJump",
-    Callback = function(s)
-        SETTINGS.SB_InfJump = s
-        toggleInfJump(s)
-    end,
-})
-
-PlayerTab:AddSection({ Name = "特殊移动" })
-
-PlayerTab:AddToggle({
-    Name = "穿墙", Default = false, Flag = "SB_Noclip",
-    Callback = function(s)
-        SETTINGS.SB_Noclip = s
-        toggleNoclip(s)
-        notify("NoClip", s and "ON" or "OFF", 1.5, "Info")
-    end,
-})
-
-PlayerTab:AddToggle({
-    Name = "飞行", Default = false, Flag = "SB_Fly",
-    Callback = function(s)
-        SETTINGS.SB_Fly = s
-        toggleFly(s, SETTINGS.SB_FlySpeed)
-        notify("Fly", s and "ON" or "OFF", 1.5, "Info")
-    end,
-})
-
-PlayerTab:AddSlider({
-    Name = "飞行速度", Min = 20, Max = 300, Default = 80, Increment = 5,
-    Suffix = "", Flag = "SB_FlySpeed",
-    Callback = function(v) SETTINGS.SB_FlySpeed = v end,
-})
-
--- ── TAB 4: 杂项 ─────────────────────────────────────────────────
+-- ── TAB 6: 杂项 ─────────────────────────────────────────────────
 local MiscTab = Window:AddTab({ Name = "杂项", Icon = "rbxassetid://6031280882" })
-
-MiscTab:AddSection({ Name = "玩家操作" })
-
-local playerDropdown = MiscTab:AddDropdown({
-    Name = "玩家列表", Items = refreshPlayerList(), Flag = "SB_SelectedPlayer",
-    Callback = function(v) selectedPlayer = v end,
-})
-
-MiscTab:AddButton({
-    Name = "刷新玩家列表",
-    Callback = function()
-        local items = refreshPlayerList()
-        if playerDropdown and playerDropdown.Refresh then
-            pcall(function() playerDropdown:Refresh(items) end)
-        end
-        notify("SlapBattle", "共 " .. #items .. " 名其他玩家", 2, "Info")
-    end,
-})
-
-MiscTab:AddButton({
-    Name = "传送到选中玩家",
-    Callback = function()
-        if not selectedPlayer then
-            notify("SlapBattle", "请先选择玩家", 2, "Warning")
-            return
-        end
-        local target = Players:FindFirstChild(selectedPlayer)
-        if target and target.Character then
-            local tr = target.Character:FindFirstChild("HumanoidRootPart")
-            local root = getRoot()
-            if tr and root then
-                local off = Vector3.new(math.random(-3, 3), 0, math.random(-3, 3))
-                pcall(function() root.CFrame = CFrame.new(tr.Position + off) end)
-                notify("SlapBattle", "已传送到 " .. selectedPlayer, 2, "Success")
-                return
-            end
-        end
-        notify("SlapBattle", "传送失败", 2, "Error")
-    end,
-})
-
-MiscTab:AddSection({ Name = "服务器" })
-
-MiscTab:AddButton({
-    Name = "重新加入 (Rejoin)",
-    Callback = function()
-        notify("SlapBattle", "正在重新加入...", 2, "Info")
-        pcall(function() TeleportService:Teleport(game.PlaceId, LocalPlayer) end)
-    end,
-})
 
 MiscTab:AddToggle({
     Name = "Anti-AFK (防挂机踢出)", Default = false, Flag = "SB_AntiAFK",
@@ -972,27 +1112,29 @@ MiscTab:AddButton({
 })
 
 MiscTab:AddParagraph({
-    Title = "Slap Battle v1.0",
+    Title = "Slap Battle v2.0 (源码移植)",
     Content = table.concat({
         "PlaceId: 6403373529",
         "",
-        "拍击原理:",
-        "  ReplicatedStorage.GeneralHit:FireServer(part)",
-        "  (part = 受害者角色里的 BasePart, 优先 HumanoidRootPart)",
-        "  回退链: GeneralHit → 老远程 b → 动态扫手套脚本常量",
+        "功能全部移植自 flamingrobot 的 Slap GUI",
+        "(By Mr.Exploit), 仅替换显示层为 QuantumUI:",
+        "  • God Mode: 删 Ragdolled/isInArena/TSVulnerability/",
+        "    IsInDefaultArena (需先进岛屿)",
+        "  • Kill Aura: 删角色 LocalScript(除 Animate) + 手套放大",
+        "    30³ + 焊透明 neon 部件, Touched → b:FireServer(hit)",
+        "  • Speed: 改 Humanoid 名为 '_ _ _' 绕过 + 设 WalkSpeed",
+        "  • JumpPower / Gravity / No TimeFreeze(解除锚定)",
+        "  • Tp Starter/Pro/Lobby (源码硬编码 CFrame)",
+        "  • Tp to Player (按名) / Force Reset (DEATHBARRIER)",
         "",
-        "生存: 掉到安全线以下自动拉回最后的安全点;",
-        "  地图边缘是虚空(DEATHBARRIER), 掉下去即死。",
+        "补充: ESP / 飞行 / 穿墙 / 无限跳 / Anti-Void / 防挂机",
         "",
         "快捷键: E=拍最近  T=放技能  RightShift=UI",
-        "",
-        "注意: 服务器对手套有冷却, 拍太快会被忽略;",
-        "  实际 slap 频率受限于你手套自身的拍击冷却。",
     }, "\n"),
 })
 
 -- ══════════════════════════════════════════════════════════════════
--- 13. 快捷键
+-- 16. 快捷键
 -- ══════════════════════════════════════════════════════════════════
 inputConn = UserInputService.InputBegan:Connect(function(input, processed)
     if processed or isDestroyed then return end
@@ -1008,11 +1150,12 @@ inputConn = UserInputService.InputBegan:Connect(function(input, processed)
 end)
 
 -- ══════════════════════════════════════════════════════════════════
--- 14. 主循环
+-- 17. 主循环
 -- ══════════════════════════════════════════════════════════════════
 charAddedConn = LocalPlayer.CharacterAdded:Connect(function()
     task.wait(1)
     if isDestroyed then return end
+    speedRenamed = false
     if SETTINGS.SB_Noclip then toggleNoclip(true) end
     if SETTINGS.SB_InfJump then toggleInfJump(true) end
     if SETTINGS.SB_Fly then toggleFly(true, SETTINGS.SB_FlySpeed) end
@@ -1030,14 +1173,13 @@ end)
 
 mainConn = RunService.RenderStepped:Connect(function()
     if isDestroyed then return end
-    pcall(combatStep)
     pcall(movementStep)
     pcall(survivalStep)
     pcall(updateESP)
 end)
 
 -- ══════════════════════════════════════════════════════════════════
--- 15. 清理
+-- 18. 清理
 -- ══════════════════════════════════════════════════════════════════
 local function cleanup()
     if isDestroyed then return end
@@ -1045,7 +1187,7 @@ local function cleanup()
 
     local conns = {
         inputConn, charAddedConn, mainConn, noclipConn,
-        infJumpConn, flyConn, idledConn, espConn, voidConn, knockConn,
+        infJumpConn, flyConn, idledConn, espConn, voidConn, freezeConn,
     }
     for _, c in ipairs(conns) do
         if c then pcall(function() c:Disconnect() end) end
@@ -1054,11 +1196,15 @@ local function cleanup()
     if flyBV then pcall(function() flyBV:Destroy() end) end
     if flyBG then pcall(function() flyBG:Destroy() end) end
 
+    disableKillAura()
+
     clearESP()
     if espFolder then
         pcall(function() espFolder:Destroy() end)
         espFolder = nil
     end
+
+    pcall(function() Workspace.Gravity = 196 end)
 
     local hum = getHum()
     if hum then
@@ -1093,7 +1239,7 @@ end
 _G.SB_Cleanup = cleanup
 
 task.wait(0.5)
-notify("Slap Battle v1.0", "Slap Battle 辅助已加载\n按 RightShift 打开 UI", 5, "Success")
+notify("Slap Battle v2.0", "Slap Battle 辅助已加载 (源码移植)\n按 RightShift 打开 UI", 5, "Success")
 
-print(string.format("[SlapBattle] v1.0 (PlaceId: %d) 加载完成 | Drawing: %s",
+print(string.format("[SlapBattle] v2.0 (PlaceId: %d) 加载完成 | Drawing: %s",
     game.PlaceId, hasDrawing and "可用" or "不可用(不影响功能)"))
