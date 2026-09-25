@@ -394,3 +394,88 @@ local list = NCM.Search("周杰伦", 10)
 NCM.SetQueue(list, 1)
 NCM.Play(list[1])
 ```
+
+---
+
+## 七、右侧歌词浮层（v1.4）
+
+贴屏幕右侧竖排显示歌词，逐行高亮 + 自动滚动居中。
+两个关键开关让它**既能看见、又不碍事**：
+
+```lua
+local Lyrics = MusicUI.CreateLyricsOverlay(Win, {
+    Side         = "Right",   -- Right / Left
+    Transparency = 0.30,      -- 背景/描边/文字统一按这个比例淡出
+    BlockInput   = false,     -- ★ 默认 false = 鼠标完全穿透，不挡操作
+    Width        = 300,
+    FadeIdle     = true,      -- 不挡操作时闲置自动更淡
+    IdleAlpha    = 0.75,
+    AutoScroll   = true,
+})
+Lyrics:BindNetease()          -- 或 Lyrics:Bind(engine)
+```
+
+| 方法 | 说明 |
+|---|---|
+| `Lyrics:SetTransparency(t)` | 0..1，越大越淡 |
+| `Lyrics:SetBlockInput(b)` | **false = 所有元素 `Active=false`，点击穿透到游戏**；true = 可拖动、可点行跳转 |
+| `Lyrics:IsBlockingInput()` | 查当前是否挡操作 |
+| `Lyrics:SetSide("Left"/"Right")` | 换边 |
+| `Lyrics:SetLines({{t=秒,text=…}})` / `Lyrics:Seek(pos)` | 手动喂歌词 / 定位 |
+| `Lyrics:Show() Hide() Toggle() IsVisible() GetFrame() Destroy()` | — |
+
+> `BlockInput = false` 时鼠标事件完全落到游戏上，所以「看着有歌词但操作不受影响」；
+> 想拖动歌词位置时再在菜单里打开「歌词挡操作」。
+
+---
+
+## 八、中央调配菜单（v1.4）
+
+屏幕正中央展开的面板，左侧导航「界面 / 音乐」。热键默认 **RightShift**。
+
+```lua
+local Menu = MusicUI.CreateControlMenu(Win, {
+    Title   = "调配菜单",
+    Width   = 560, Height = 400,
+    Key     = Enum.KeyCode.RightShift,
+    Engine  = engine,        -- 音乐页用（可选）
+    Lyrics  = Lyrics,        -- 歌词浮层（可选）
+    MiniBar = Mini,          -- 迷你播放条（可选）
+    Panel   = Panel,         -- 完整音乐窗口（可选）
+    GetPlaying = function() return ncm.GetState().playing end,
+    GetVolume  = function() return ncm.GetState().volume end,
+    OnVolume   = function(v) ncm.SetVolume(v) end,
+})
+Menu:Open()  Menu:Close()  Menu:Toggle()  Menu:IsOpen()
+Menu:SetPage("音乐")
+```
+
+**界面页**（驱动 `source.lua` 的真实设置，步进器实时读当前值，外部改了也同步）：
+
+| 控件 | 作用 |
+|---|---|
+| 主题 ◀ ▶ | `SwitchTheme`（Cyan / Gold / Violet / Frost / Mono / Cyber / Sakura） |
+| 风格 ◀ ▶ | `SwitchStyle`（Sharp / Soft / Round / Glass） |
+| 布局 ◀ ▶ | `SwitchLayout`（Default / Rail / TopBar / Grid / Float / Vape） |
+| 边框风格 ◀ ▶ | `SetBorderMode`（Solid / Rainbow / Aurora / Pulse / Neon） |
+| 动态边框 开关 | `SetBorderEnabled` |
+| 边框速度 / 粗细 | `SetBorderSpeed` / `SetBorderThickness` |
+| 窗口透明度 | `SetTransparency` |
+
+**音乐页**：账号状态（只读）、播放/暂停、音量、歌词显示、歌词透明度、
+歌词挡操作、迷你播放条显隐、完整音乐窗口显隐。
+
+交互：缩放(0.92→1) + 淡入展开；半屏暗背景点击关闭；标题栏可拖动。
+
+---
+
+## 九、三种形态怎么选
+
+| 形态 | 用途 | 创建 |
+|---|---|---|
+| 迷你播放条 | 一直在前台、不挡游玩 | `MusicUI.CreateMiniBar(Win, {Dock="Top"})` |
+| 完整音乐窗口 | 搜索 / 列表 / 队列 / 歌词全功能 | `MusicUI.CreateWindow(Win)` |
+| 右侧歌词浮层 | 只要歌词，可穿透 | `MusicUI.CreateLyricsOverlay(Win, {BlockInput=false})` |
+| 中央调配菜单 | 改主题/风格/边框 + 管音乐 | `MusicUI.CreateControlMenu(Win, {...})` |
+
+四个可以同时存在，互不干扰；菜单里能直接开关另外三个。
