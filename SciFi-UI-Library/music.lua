@@ -4119,8 +4119,15 @@ local function buildControlMenu(host, cls, opts)
         })
         task.spawn(function()
             if eng and eng.Login then
-                local ok, a = pcall(function() return eng.Login() end)
-                accVal.Text = (ok and a) and (tostring(a.nickname) .. " · " .. tostring(a.vipName)) or "未登录"
+                -- 注意：engine:Login() 返回 (ok, account) 两个值，
+                -- pcall 前面还会补一个 success，所以这里要接三个：
+                --   ok      = pcall 是否成功
+                --   logged  = 是否已登录（boolean）
+                --   a       = 账号表（未登录时为 nil）
+                -- 只接两个的话 a 会拿到 boolean，下面 a.nickname 直接炸。
+                local ok, logged, a = pcall(function() return eng.Login() end)
+                accVal.Text = (ok and logged and type(a) == "table")
+                    and (tostring(a.nickname) .. " · " .. tostring(a.vipName)) or "未登录"
             else
                 accVal.Text = "无引擎"
             end
