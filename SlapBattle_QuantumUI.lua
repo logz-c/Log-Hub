@@ -290,8 +290,9 @@ local function doGodMode()
     local rag = char:FindFirstChild("Ragdolled")
     local isInArena = char:FindFirstChild("isInArena")
     if rag and isInArena then
-        local inArena = true
-        pcall(function() inArena = (isInArena:IsA("BoolValue") and isInArena.Value == true) or true end)
+        -- 源码要求: isInArena.Value == true 才能开 (必须先进入岛屿)
+        local inArena = false
+        pcall(function() inArena = (isInArena:IsA("BoolValue") and isInArena.Value == true) end)
         if inArena then
             pcall(function() rag:Destroy() end)
             pcall(function() isInArena:Destroy() end)
